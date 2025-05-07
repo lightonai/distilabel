@@ -32,15 +32,15 @@ def steps_to_load_groups(steps: list[Step], n_gpus: int) -> list[list[str]]:
     load_groups.append(load_group)
     return load_groups
 
-def data_router(step_distribution: list[float]) -> Callable:
+def data_router(step_distribution: list[float], k: int = 1) -> Callable:
     '''
-    Given a list of downstream steps and a distribution, per batch, sample the downstream step to route to
+    Given a list of downstream steps and a distribution, per batch, sample k downstream steps to route to
 
     Use this as a step in a pipeline to e.g. split the data from a step to different language models
     '''
     @routing_batch_function()
     def router(steps: list[str]) -> list[str]:
-        return random.choices(steps, weights=step_distribution, k=1)
+        return random.choices(steps, weights=step_distribution, k=k)
     return router
 
 def make_lms(stage: Stage) -> list[OpenAILM]:
@@ -57,4 +57,3 @@ def make_lms(stage: Stage) -> list[OpenAILM]:
         ) 
         for lm_config in stage.lm_configs
     ]
-

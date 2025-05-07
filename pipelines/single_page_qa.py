@@ -1,7 +1,5 @@
-from typing import Any
-
 from distilabel.pipeline import Pipeline
-from datasets import load_from_disk
+from datasets import load_from_disk, Dataset
 
 from distilabel.steps import (
     StepResources, 
@@ -24,10 +22,6 @@ from distilabel.configs.single_pages import config
 
 STAGE = 0
 '''tracks the current stage of the pipeline'''
-
-# define this as a function to make it pickleable
-def structured_generation(generation: str) -> bool:
-    return generation is not None
 
 def lm_task_router(lm: OpenAILM, **kwargs) -> Task:
     # Here as a demonstration of general versatility in configuring pipelines, you may want different LMs running different tasks
@@ -70,7 +64,7 @@ def run_pipeline(config: Config):
                 **lm.lm_config.task_kwargs,
             ) 
             for i, lm in enumerate(lms)
-        ]  # cols: ['source', ...] -> ['questions', 'key_ideas', 'key_details', 'system', ...]
+        ]  # cols: ['source', ...] -> ['questions', 'key_ideas', 'key_details', 'question_system', 'question_model_name', ...]
         questions_to_rows = ListToRows(  # expand the generated list of questions into separate rows
             name="questions_to_rows",
             input_col='questions',
@@ -81,7 +75,7 @@ def run_pipeline(config: Config):
         drop_none_questions = FilterRows(  # drop rows where the question is None (structured output failed)
             name="drop_none_questions",
             cols=['question'],
-            condition=structured_generation,
+            condition=utils.generation_is_structured,
             input_batch_size=64,
         )  # cols: ['question', ...] -> ['question', ...]
     
@@ -102,15 +96,15 @@ def run_pipeline(config: Config):
                 in_cols=['question'],
                 input_batch_size=64,
                 resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.tp_size),
-                output_mappings={'system': 'answer_system', 'model_name': 'answer_model_name'},
+                output_mappings={'system': 'answer_system', 'model_name': 'answer_model_name', 'generation': 'answer'},
                 **lm.lm_config.task_kwargs,
             )
             for i, lm in enumerate(lms)
-        ]  # cols: ['source', 'question', ...] -> ['answer', 'system', ...]
+        ]  # cols: ['source', 'question', ...] -> ['answer', 'answer_system', 'answer_model_name', ...]
         drop_none_answers = FilterRows(
             name="drop_none_answers",
             cols=['answer'],
-            condition=structured_generation,
+            condition=utils.generation_is_structured,
             input_batch_size=64,
         )  # cols: ['answer', ...] -> ['answer', ...]
 
@@ -136,8 +130,37 @@ def run_pipeline(config: Config):
     )
     return distiset
 
+def add_qa_to_other_splits(distiset: Dataset):
+    '''
+    For mp_data_gen for Scribe, adding the questions to the other splits that 
+    use the same questions/answers with different context
+    '''
+    dataset_dict = load_from_disk('out/mp_synthetic_data')
+
+    ## Add the questions and answers to distractors_short
+    distractors_short = utils.add_cols_to_split(distiset, dataset_dict['distractors_short'], ['question', 'answer'])
+    ## Add the questions to hard_negs_short
+    hard_negs_short = utils.add_cols_to_split(distiset, dataset_dict['hard_negs_short'], ['question'])
+    ## Add the questions to adjacent_pages_short
+    adjacent_pages_short = utils.add_cols_to_split(distiset, dataset_dict['adjacent_pages_short'], ['question'])
+
+    new_splits = {
+        'distractors_short': distractors_short,
+        'hard_negs_short': hard_negs_short,
+        'adjacent_pages_short': adjacent_pages_short,
+    }
+
+    ## Overwrite the splits on disk
+    del dataset_dict  # so that the files are not currently open and they can be deleted
+    
+    from distilabel.configs.single_pages import OVERWRITE_SPLITS
+    for split in OVERWRITE_SPLITS:
+        utils.overwrite_dataset_dict_split('out/mp_synthetic_data', split, new_splits[split])
+
 if __name__ == "__main__":
     distiset = run_pipeline(config)['default']['train']
     distiset = distiset.remove_columns(['distilabel_metadata'])  # don't need this for this pipeline
-    pass
 
+    # don't modify original single_pages, but save all the data/metadata generated here
+    utils.add_split_to_dataset_dict('out/mp_synthetic_data', 'single_page_qa', distiset)
+    add_qa_to_other_splits(distiset)

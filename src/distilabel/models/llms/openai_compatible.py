@@ -103,7 +103,8 @@ def structured_output(agenerate: Callable) -> Callable:
                 temperature=temperature,
                 extra_body=extra_body,
             )
-
+            if self.lm_config.out_model is None:  # allow for no pydantic model
+                return generate_output
             ## attempt to format with pydantic, being careful to unhide the system prompt
             try:
                 # assume only one generation
@@ -111,7 +112,7 @@ def structured_output(agenerate: Callable) -> Callable:
                     generate_output['generations'][0], 
                     strict=True
                 ).model_dump_json()  
-                # technically my pydantic model allows extra fields, but they will be dropped
+                # if your pydantic model allows extra fields, no worries, they will be dropped
 
                 return generate_output
             except ValidationError:
@@ -185,7 +186,7 @@ class OpenAILM(OpenAILLM, CudaDevicePlacementMixin, VLM):
                 '2>&1 & echo $!' # echo is for reading the PID
             )
             self._vllm_api.gpu = gpu
-            self._vllm_api.start_vllm(launch_vllm)
+            # self._vllm_api.start_vllm(launch_vllm)
 
     def _assign_cuda_devices(self):
         '''Override the default cuda device assignment to only assign to the available gpus'''

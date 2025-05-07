@@ -16,7 +16,8 @@ class LMGenerationTask(Task):
     Task for running LM/VLM generation with a sampled system prompt and structured output.
 
     The pydantic model will be unpacked into separate columns for output or will be none if 
-    structured output fails within `STRUCTURED_OUTPUT_RETRIES`.
+    structured output fails within `STRUCTURED_OUTPUT_RETRIES`. If the pydantic model is None,
+    the output will be returned as a string in the 'generation' column.
 
     Args:
     ---
@@ -35,6 +36,8 @@ class LMGenerationTask(Task):
     
     @property
     def pydantic_fields(self) -> list[str]:
+        if self.lm_config.out_model is None:
+            return ['generation']
         return list(self.lm_config.out_model.model_fields.keys())
 
     @property
@@ -49,8 +52,10 @@ class LMGenerationTask(Task):
         return self.input_formatter(input, self.in_cols)
 
     def format_output(self, output: str | None, input: dict) -> dict:
-        none_dict = dict.fromkeys(self.pydantic_fields)
-        load_pydantic = partial(self.lm_config.out_model.model_validate_json, strict=True)
+        pydantic_output = {'generation': output}
+        if self.lm_config.out_model is not None:
+            none_dict = dict.fromkeys(self.pydantic_fields)
+            load_pydantic = partial(self.lm_config.out_model.model_validate_json, strict=True)
 
-        pydantic_output = load_pydantic(output).model_dump() if output is not None else none_dict
+            pydantic_output = load_pydantic(output).model_dump() if output is not None else none_dict
         return {**pydantic_output, 'source': input['source'], 'system': input['system']}

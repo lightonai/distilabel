@@ -8,6 +8,8 @@ from io import StringIO
 import sys
 import re
 from typing import Callable
+from datasets import Dataset
+from pathlib import Path
 
 from .image import get_image, downsample_image, b64_encode_image
 
@@ -37,6 +39,10 @@ def normalize_distribution(dist: list[float]) -> list[float]:
 def load_json(path):
     with open(path, 'r') as f:
         return json.load(f)
+
+def save_json(path, data):
+    with open(path, 'w') as f:
+        json.dump(data, f)
 
 def pdf_name(page):
     '''Return the pdf name from a page filename'''
@@ -69,14 +75,60 @@ def generate_field_to_idx(ds, field):
     return field_to_idx
 
 def clear_dir(directory):
-    """Empty a directory."""
-    if pth(directory).is_dir():
-        for root, dirs, files in os.walk(directory, topdown=False):
-            for name in files:
-                (pth(root) / name).unlink()
-            for name in dirs:
-                (pth(root) / name).rmdir()
-        pth(directory).rmdir()
+    """Remove a directory and all its contents using subprocess and 'rm -rf'."""
+    import subprocess
+    subprocess.run(['rm', '-rf', str(directory)])
+
+def add_split_to_dataset_dict(dataset_path: str | Path, split_name: str, data: Dataset):
+    '''Add a split to a dataset dict by saving the dataset and updating the dataset_dict.json'''
+    if isinstance(dataset_path, str): dataset_path = Path(dataset_path)
+
+    split_path = str(dataset_path / split_name)
+    if (dataset_path / split_name).exists():
+        return
+    json_path = str(dataset_path / 'dataset_dict.json')
+
+    data.save_to_disk(split_path)
+
+    dataset_dict = load_json(json_path)
+    dataset_dict['splits'].append(split_name)
+    save_json(json_path, dataset_dict)
+
+def overwrite_dataset_dict_split(dataset_path: str | Path, split_name: str, data: Dataset):
+    '''Overwrite a split in a dataset dict by removing the old dataset and saving the new one'''
+    if isinstance(dataset_path, str): dataset_path = Path(dataset_path)
+
+    split_path = str(dataset_path / split_name)
+    clear_dir(split_path)
+    data.save_to_disk(split_path)
+
+def add_cols_to_split(distiset: Dataset, split: Dataset, cols: list[str]):
+    '''
+    Take the rows in distiset, take the source in split that has the same first element as the source in distiset, 
+    and make a new row with the values in cols from distiset and the source from split.
+
+    The new split will have the same order as the distiset
+    '''
+    source_to_row = {}
+    for i, source in enumerate(split['source']):
+        source_to_row[source[0]] = i
+    
+    updated_rows = []
+    for row in distiset:
+        # Find the matching row and update with the question
+        split_row = split[source_to_row[row['source'][0]]]
+        updated_rows.append(split_row | {col: row[col] for col in cols})
+    
+    return Dataset.from_list(updated_rows)
+
+# define this as a function to make it pickleable
+def generation_is_structured(generation: str) -> bool:
+    '''Bool indicator of whether a generation is None or not'''
+    return generation is not None
+
+def add_split_label(dataset: list[dict], split: str) -> list[dict]:
+    '''Add a split label to a dataset given as a list of dicts'''
+    return [{**row, 'split': split} for row in dataset]
 
 def load_pydantic(path, config_class):
     '''load yaml config and convert into pydantic config'''

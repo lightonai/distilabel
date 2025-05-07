@@ -48,7 +48,11 @@ class LMConfig(BaseModel):
     task_kwargs: dict[str, Any] = {}
     '''kwargs for the task, use this to pass in task specific kwargs'''
     out_model: type[BaseModel] | str | None = None
-    '''pass a string that is the name of a pydantic model in configs.py or a pydantic model'''
+    '''
+    pass a string that is the name of a pydantic model in configs.py, a pydantic model, or None.
+    
+    if None, the model will not attempt to format the output as a pydantic model
+    '''
     prompt_sampler_config: PromptSamplerConfig = Field(default_factory=PromptSamplerConfig)
     '''config for the prompt sampler, which formats the prompt kwargs probabilistically'''
 
@@ -112,7 +116,4 @@ class SinglePageQuestions(BaseModel):
     key_details: str
     questions: list[str]
 
-class SinglePageAnswers(BaseModel):
-    '''Config for the single page answers output format'''
-    answer: str
 

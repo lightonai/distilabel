@@ -67,6 +67,10 @@ question_prompt_sampler_config = PromptSamplerConfig(
 )
 answer_prompt_sampler_config = PromptSamplerConfig()
 
+OVERWRITE_SPLITS = {'distractors_short', 'hard_negs_short', 'adjacent_pages_short'}
+'''
+splits to overwrite on disk with the new questions and answers
+'''
 AVAILABLE_GPUS = [4, 5]
 task_name = 'question_generation'
 data_ratios = utils.normalize_distribution([1] * 1)
@@ -129,43 +133,11 @@ stages = [
                 task_name=task_name,
                 tp_size=1,
                 replicas=2,
-                out_model='SinglePageAnswers',
+                out_model=None,
                 prompt_sampler_config=answer_prompt_sampler_config,
             ),
-            # LMConfig(
-            #     path='gpt-4.1-mini', 
-            #     data_ratio=data_ratios[1], 
-            #     task_name=task_name,
-            #     replicas=1,
-            #     out_model='SinglePageAnswers',
-            #     prompt_sampler_config=answer_prompt_sampler_config,
-            # ),
-            # LMConfig(
-            #     path='gemini-2.0-flash-lite',
-            #     data_ratio=data_ratios[2],
-            #     task_name=task_name,
-            #     replicas=1,
-            #     out_model='SinglePageAnswers',
-            #     prompt_sampler_config=answer_prompt_sampler_config,
-            # ),
-            # LMConfig(
-            #     path='claude-3-haiku-20240307', 
-            #     data_ratio=data_ratios[3], 
-            #     task_name=task_name,
-            #     replicas=1,
-            #     out_model='SinglePageAnswers',
-            #     prompt_sampler_config=answer_prompt_sampler_config,
-            # ),
-            # LMConfig(
-            #     path='grok-3-mini-beta', 
-            #     data_ratio=data_ratios[4], 
-            #     task_name=task_name,
-            #     replicas=1,
-            #     out_model='SinglePageAnswers',
-            #     prompt_sampler_config=answer_prompt_sampler_config,
-            # ),
         ],
-        default_system_template_path='distilabel/prompts/single_page_answers.txt',
+        default_system_template_path='distilabel/prompts/simple_answer.txt',
         available_gpus=AVAILABLE_GPUS,
         max_dims=(512, 512),
     )
