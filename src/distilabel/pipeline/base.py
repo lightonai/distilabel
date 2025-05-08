@@ -1158,6 +1158,8 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
                 for step_name in self.dag.get_step_predecessors(batch.step_name):
                     if self._is_step_running(step_name):
                         self._send_last_batch_flag_to_step(step_name)
+                if self._is_step_running(batch.step_name):
+                    self._send_last_batch_flag_to_step(batch.step_name)
 
     def _set_step_for_recovering_offline_batch_generation(
         self, step: "_Step", data: List[List[Dict[str, Any]]]
