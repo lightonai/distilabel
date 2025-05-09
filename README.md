@@ -167,7 +167,7 @@ To directly contribute with `distilabel`, check our [good first issues](https://
 - Inherits some cool things from distilabel such as the premade EvolInstructGenerator Task and [others](https://distilabel.argilla.io/latest/components-gallery/tasks/?h=task+gal).
 - Slightly improved prompt sampler by making it part of the config (easier to edit and have multiple of) and adding the ability to generate list fields in an API call (say generate 4 questions instead of 1 and split these into separate rows)
 
-## Notes About This Repo
+## Notes About My Additions
 - Run everything from the outside the `distilabel` directory. e.g. `python distilabel/pipelines/single_page_qa.py`
 - In the modified distilabel package, here are some of the files I have added (you could also check the git commit history)
     - `pipelines/single_page_qa.py`. Put new pipelines here. The single page one is a good reference for how to do everything, copy and modify
@@ -179,6 +179,7 @@ To directly contribute with `distilabel`, check our [good first issues](https://
 - The only requirement for the dataset format is having a source column which is expected to be a string (straight input to the LM) or a list of image paths (which can point straight to jpg/png files or a page in a pdf with format `path/to/pdf_page_x.pdf`). This is atm only an expectation in `VLM._format_input()` when it is passed to `LMGenerationTask.input_formatter`, so you can change the `input_formatter`/override this if you need or just make `VLM._format_input()` more general.
 - I handle scheduling gpus by overriding the available gpus seen by `CudaDevicePlacementMixin` and breaking the tasks into multiple load stages so that there are enough gpus available during each.
 - It will launch a vllm server if the model name is not a recognized proprietary model.
+- Stages in the config and load stages in distilabel are different concepts. Stages in the config are broken into maybe multiple load stages/groups in distilabel so that I can handle scheduling arbitrary amounts of models into different load stages in the pipeline.
 
 ## Notes on Distilabel (Issues and Helpful Knowledge)
 - **Short Version**: distilabel is very particular about how things are done, so there's a reason why every line is the way it is and I recommend starting off of one of the existing pipelines. Also, reading my code for e.g. the single page pipeline will tell you how to build on top of distilabel. Use the rest of this list as an issue tracker so people know how to solve issues in the future.
@@ -203,11 +204,13 @@ To directly contribute with `distilabel`, check our [good first issues](https://
         - The way its resuming works is when you call `pipeline.run()`, one of the early steps is `self._refresh_pipeline_from_cache()` which essentially creates an entirely new dag from the cached information. Then, for excluded or secret fields, it sets them using the values of the current dag. Now that I know this, their design seems reasonable, but it is important that you understand the effect of `Field(exclude=True)` to get resuming working properly. The need for serialization and deserialization also justifies the extensive use of Pydantic in distilabel.
 - Had to set `vllm_api` field to private so that it didn't try to serialize it in multiprocessing. 
 - Might be errors with changing load_groups for a pipeline that you are trying to resume
+- You can't connect a list of steps to a routing batch function, so I have a `NoOp` step that can serve as a 'junction' before the routing batch function.
 - I made step resources an excluded parameter (from the signature and caching) so that you can change these and the pipeline will resume as normal
 - [IMPORTANT] I ran into a tough error with distilabel hanging when trying to resume. The root cause (or one of them) was probably that I had stopped execution in the vscode debugger, which hard stops the program and distilabel didn't save the batch back to the pipeline's batch manager, making it so that my initial generator step didn't have its batch data and wasn't sending it up the pipeline. I am still not sure entirely how batches are routed, since this is a large and complex system, but anyways, be wary of the hanging issue. Keep in mind the functions `_manage_batch_flow, _BatchManagerStep._get_data(), get_batch() and add_batch() and _initialize_pipeline_execution()` which are related to batches in distilabel. I am not sure how exactly to solve this if it happens on something expensive to re-run. Maybe try manually editing the cache if you can find the right information. 
   - You can run into an error with it not being able to allocate gpus, making `os.environ['CUDA_VISIBLE_DEVICES']` fail, when it has been stopped in a weird way. Run it and let it crash, clear the cache and restart it. If you want to avoid clearing the cache, perhaps try finding the device_map file from `cuda_device_placement.py` and clearing that.
 - Ran into another hanging issue during normal run: the system previously sent `LAST_BATCH_SENT_FLAG` only to predecessors of a step that had sent a last batch to output. i.e. the step should be done, but only the predecessors get told to quit. When a load stage ends with a step that has multiple replicas, it will wait for the next stage, but not send a signal to tell the other replicas to quit working. I added sending a signal to the step that sent the last batch to output so that all the replicas are closed if needed. (this seems like it should be the way to do things in the first place, but I will settle for adding it on top of existing logic in case there was another reason for it)
-
+- While debugging, you can set `DISTILABEL_LOG_LEVEL=DEBUG` to see a lot of helpful info.
+- [IMPORTANT] Another tough deadlock/hanging error: if one of your steps gives a batch size of 0 as output (e.g. you give the wrong system prompt for a given pydantic output and all of them fail to be structured so your filter step drops all rows), then it can hang. The responsible line, if the step is a normal step (as opposed to a convergence step (a step after a list of steps that are routed to with a routing batch function) or an accumulate step), is (probably) `if num_rows == 0 and step_name in self.last_batch_received:` in `_BatchManagerStep` (around L:555).
 
 ## Citation
 

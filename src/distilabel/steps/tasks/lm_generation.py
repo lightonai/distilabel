@@ -1,6 +1,6 @@
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING, Callable, Annotated
 from functools import partial
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from distilabel.steps.tasks import Task
 from distilabel.pydantics import Stage, LMConfig
@@ -21,12 +21,25 @@ class LMGenerationTask(Task):
 
     Args:
     ---
-        in_cols: extra columns to include in the messages to the LM, postfixed in order 
+        lm_input_cols: extra columns to include in the messages to the LM, postfixed in order 
+        lm_input_col_prefixes: prefixes to prepend to the lm_input_cols (e.g. 'reference answer: ')
+        extra_cols: extra columns for the step to know about for input or output mappings
     '''
     stage: Stage = Field(default_factory=Stage, exclude=True)
     lm_config: LMConfig = Field(default_factory=LMConfig, exclude=True)
-    in_cols: list[str] = []
+    lm_input_cols: list[str] = []
+    lm_input_col_prefixes: list[str] = []
     input_formatter: Callable = Field(default=lambda **kwargs: kwargs, exclude=True)
+    extra_cols: list[str] = []
+
+    @model_validator(mode='after')
+    def valid_prefix_length(self) -> 'LMGenerationTask':
+        if len(self.lm_input_col_prefixes) != 0 and len(self.lm_input_col_prefixes) != len(self.lm_input_cols):
+            raise ValueError((
+                f'lm_input_col_prefixes must be the same length as lm_input_cols, '
+                f'got {len(self.lm_input_col_prefixes)} and {len(self.lm_input_cols)}'
+            ))
+        return self
 
     # note that Task.unload() will unload the llm, so we don't need to do that ourselves
     def load(self):
@@ -42,14 +55,14 @@ class LMGenerationTask(Task):
 
     @property
     def inputs(self) -> 'StepColumns':
-        return ['source'] + self.in_cols
+        return ['source'] + self.lm_input_cols + self.extra_cols
 
     @property
     def outputs(self) -> 'StepColumns':
-        return ['source', 'model_name', *self.pydantic_fields, 'system']
+        return ['source', 'model_name', *self.pydantic_fields, 'system'] + self.extra_cols
 
     def format_input(self, input: dict) -> 'ChatType':
-        return self.input_formatter(input, self.in_cols)
+        return self.input_formatter(input, self.lm_input_cols, self.lm_input_col_prefixes)
 
     def format_output(self, output: str | None, input: dict) -> dict:
         pydantic_output = {'generation': output}

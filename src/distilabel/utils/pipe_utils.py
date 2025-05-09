@@ -5,7 +5,7 @@ from distilabel.pipeline import routing_batch_function
 from distilabel.steps import Step
 
 from distilabel.models.llms import OpenAILM
-from distilabel.pydantics import Stage
+from distilabel.pydantics import Stage, Config
 
 def steps_to_load_groups(steps: list[Step], n_gpus: int) -> list[list[str]]:
     '''
@@ -43,7 +43,44 @@ def data_router(step_distribution: list[float], k: int = 1) -> Callable:
         return random.choices(steps, weights=step_distribution, k=k)
     return router
 
-def make_lms(stage: Stage) -> list[OpenAILM]:
+def multi_branch_data_router(
+    branch_configs: list[dict]
+) -> Callable:
+    '''
+    Route data to multiple branches, with each branch having its own step distribution and sample size.
+    
+    Args:
+        branch_configs: List of dicts, each containing:
+            - step_names: List of step names belonging to this branch
+            - distribution: Weights for steps within this branch
+            - k: Number of steps to sample for this branch
+            
+    Returns:
+        A router function that splits incoming steps by branch and samples from each branch
+    '''
+    # set of all step names
+    step_map = {step_name for branch in branch_configs for step_name in branch['step_names']}
+            
+    @routing_batch_function()
+    def router(steps: list[str]) -> list[str]:
+        # verify we have all the same steps
+        assert len(steps) == len(step_map) and all(step in step_map for step in steps)
+        
+        # sample from each branch
+        result = []
+        for branch in branch_configs:
+            result.extend(
+                random.choices(
+                    branch['step_names'], 
+                    weights=branch['distribution'], 
+                    k=branch['k']
+                )
+            )
+        return result
+    
+    return router
+
+def make_lms(config: Config, stage: Stage) -> list[OpenAILM]:
     '''initialize lms for a stage'''
     return [
         OpenAILM(
@@ -54,6 +91,7 @@ def make_lms(stage: Stage) -> list[OpenAILM]:
                 'temperature': lm_config.temperature, 
                 'max_new_tokens': lm_config.max_new_tokens,
             },
+            debug_with_running_vllm=config.debug_with_running_vllm,
         ) 
         for lm_config in stage.lm_configs
     ]

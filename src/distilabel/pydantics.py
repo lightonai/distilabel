@@ -109,6 +109,12 @@ class Stage(BaseModel):
 class Config(BaseModel):
     '''Config for a pipeline'''
     stages: list[Stage]
+    debug_with_running_vllm: bool = False
+    '''
+    if True, all vllm models will expect to be able to call a pre-running model on port 8000.
+    
+    This is useful for debugging, when you don't want to pay for proprietary models or start a vllm server on launch
+    '''
 
 class SinglePageQuestions(BaseModel):
     '''Config for the single page questions output format'''
@@ -116,4 +122,26 @@ class SinglePageQuestions(BaseModel):
     key_details: str
     questions: list[str]
 
+class MultiPageQuestions(BaseModel):
+    '''Model for structured output from multi-page question generation'''
+    analysis: str
+    questions: list[str]
 
+class QuestionRequirements(BaseModel):
+    '''Ask the LM to break down the question into requirements'''
+    question_requirements: str
+    # making this a string so that it can serve as input to a LM
+
+class SatisfactoryAnswer(BaseModel):
+    '''
+    Determine if the answer satisfies requirements
+    '''
+    question_requirements_met: list[bool]
+    question_fully_answered: bool = False
+
+    @model_validator(mode='after')
+    def apply_default_system_template(self) -> 'SatisfactoryAnswer':
+        # might want custom logic like 75% of requirements met
+        if all(self.question_requirements_met):
+            self.question_fully_answered = True
+        return self

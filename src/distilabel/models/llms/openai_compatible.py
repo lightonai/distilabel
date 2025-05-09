@@ -15,24 +15,37 @@ from distilabel.typing import ChatType, FormattedInput, GenerateOutput
 
 from distilabel import utils
 from distilabel.pydantics import LMConfig, Stage
-from distilabel.utils import PromptSampler
+from distilabel.prompt_sampler import PromptSampler
 from distilabel.constants import STRUCTURED_OUTPUT_RETRIES
 
 class VLM:
     stage: Stage = Field(default_factory=Stage, exclude=True)
     lm_config: LMConfig = Field(default_factory=LMConfig, exclude=True)
     prompt_sampler: PromptSampler | None = None
+    debug_with_running_vllm: bool = Field(default=False, exclude=True)
 
-    def _format_input(self, input: dict, in_cols: list[str]) -> 'ChatType':
-        '''takes raw dictionary row from dataset and samples a system prompt + formats in messages'''
+    def _format_input(self, input: dict, lm_input_cols: list[str], lm_input_col_prefixes: list[str]) -> 'ChatType':
+        '''
+        takes raw dictionary row from dataset and samples a system prompt + formats in messages
+
+        Also takes extra columns to include in the messages, 
+        postfixed in order and prefixed with the lm_input_col_prefixes
+        '''
         messages = [{'role': 'system', 'content': self.prompt_sampler.generate_prompt()}]
         
         # Handle source content
         messages.append(utils.source_to_msg(input['source'], self.stage.max_dims, self.msg_content_img))
         
         # Handle extra columns
-        for col in in_cols:
-            messages.append(utils.source_to_msg(input[col], self.stage.max_dims, self.msg_content_img))
+        if len(lm_input_col_prefixes) == 0:
+            lm_input_col_prefixes = [''] * len(lm_input_cols)
+        for col, prefix in zip(lm_input_cols, lm_input_col_prefixes):
+            message = utils.source_to_msg(input[col], self.stage.max_dims, self.msg_content_img)
+            if isinstance(message['content'], str):
+                message['content'] = prefix + message['content']
+            else:
+                messages.append({'role': 'user', 'content': prefix})
+            messages.append(message)
         
         # inplace update the input to sneak it into the format_output of LMGenerationTask
         input |= {'system': messages[0]['content']}
@@ -164,8 +177,8 @@ class OpenAILM(OpenAILLM, CudaDevicePlacementMixin, VLM):
 
             self._vllm_api = vLLMAPI(self.lm_config)
             self.base_url = f'http://localhost:{self._vllm_api.port}/v1'
-        
-        self.base_url = 'http://localhost:8000/v1'
+            if self.debug_with_running_vllm:
+                self.base_url = 'http://localhost:8000/v1'
 
         # must come after the base_url is set properly
         super().load()
@@ -173,7 +186,7 @@ class OpenAILM(OpenAILLM, CudaDevicePlacementMixin, VLM):
         CudaDevicePlacementMixin.load(self)
         
         # must come after CUDA_VISIBLE_DEVICES is set properly
-        if self.use_vllm:
+        if self.use_vllm and not self.debug_with_running_vllm:
             gpu = os.environ['CUDA_VISIBLE_DEVICES'].split(',')[0]
             launch_vllm = (
                 f'vllm serve {self.lm_config.path} '
@@ -186,7 +199,7 @@ class OpenAILM(OpenAILLM, CudaDevicePlacementMixin, VLM):
                 '2>&1 & echo $!' # echo is for reading the PID
             )
             self._vllm_api.gpu = gpu
-            # self._vllm_api.start_vllm(launch_vllm)
+            self._vllm_api.start_vllm(launch_vllm)
 
     def _assign_cuda_devices(self):
         '''Override the default cuda device assignment to only assign to the available gpus'''

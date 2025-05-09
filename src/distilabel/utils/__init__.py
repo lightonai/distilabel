@@ -45,9 +45,6 @@ from .misc import (
     suppress_output,
 )
 
-# Prompt sampler
-from .prompt_sampler import PromptSampler
-
 __all__ = [
     # Image utilities
     "image_to_str",
@@ -77,7 +74,4 @@ __all__ = [
     "add_split_label",
     "is_openai_model_name",
     "suppress_output",
-
-    # Prompt sampler
-    "PromptSampler"
 ]

@@ -548,7 +548,10 @@ class _BatchManagerStep(_Serializable):
                 next_expected_seq_no += 1
 
             # If there are now rows but the last batch was already received, then there
-            # are no more batches to be created
+            # are no more batches to be created 
+                # I think this condition is for after this step has already forwarded its batches
+                # and now it doesn't need to do anything else, but it can happen when a step sends a batch
+                # of size 0 that is the last batch (say you filtered out all the generations)
             if num_rows == 0 and step_name in self.last_batch_received:
                 return False
 

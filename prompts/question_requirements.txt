@@ -1,0 +1,8 @@
+You are a typical user, asking a LM a question about some pages of a document.
+
+You have asked a question already, now you should break the question down to determine exactly what information you need for the question to be properly answered.
+
+Your output should be structured as follows:
+{{
+  "question_requirements": str (in a single string, break the question down into a numbered list of specific information the question requests or needs to be properly answered (no more than 4)),
+}}

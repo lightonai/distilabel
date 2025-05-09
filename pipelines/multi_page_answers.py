@@ -53,7 +53,7 @@ def run_pipeline(config: Config):
         data_router = pipe_utils.data_router(
             step_distribution=[lm_config.data_ratio for lm_config in stage.lm_configs]
         )
-        lms = pipe_utils.make_lms(stage)
+        lms = pipe_utils.make_lms(config, stage)
         generate_answers = [
             lm_task_router(
                 name=f"answer_generation_{i}",
@@ -61,7 +61,7 @@ def run_pipeline(config: Config):
                 lm=lm,
                 lm_config=lm.lm_config,
                 input_formatter=lm._format_input,
-                in_cols=['question'],
+                lm_input_cols=['question'],
                 input_batch_size=64,
                 resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.tp_size),
                 output_mappings={'system': 'answer_system', 'model_name': 'answer_model_name', 'generation': 'answer'},

@@ -122,9 +122,9 @@ def add_cols_to_split(distiset: Dataset, split: Dataset, cols: list[str]):
     return Dataset.from_list(updated_rows)
 
 # define this as a function to make it pickleable
-def generation_is_structured(generation: str) -> bool:
-    '''Bool indicator of whether a generation is None or not'''
-    return generation is not None
+def generation_is_structured(row: dict, cols: list[str]) -> bool:
+    '''Bool indicator of whether any of the cols are None'''
+    return all([row[col] is not None for col in cols])
 
 def add_split_label(dataset: list[dict], split: str) -> list[dict]:
     '''Add a split label to a dataset given as a list of dicts'''

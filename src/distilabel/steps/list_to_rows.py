@@ -26,7 +26,7 @@ class ListToRows(Step):
     def process(self, *inputs: StepInput) -> 'StepOutput':
         for step_input in inputs:
             expanded_fields = [
-                {k: row[k] for k in row.keys()} | {self.input_col: field}
+                row | {self.input_col: field}
                 for row in step_input
                     for field in (row[self.input_col] if row[self.input_col] else [None])
             ]

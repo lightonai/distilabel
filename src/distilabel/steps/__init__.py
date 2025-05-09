@@ -32,6 +32,7 @@ from distilabel.steps.columns.merge import MergeColumns
 from distilabel.steps.columns.pydantic_to_cols import LoadPydanticAsColumns
 from distilabel.steps.decorator import step
 from distilabel.steps.deita import DeitaFiltering
+from distilabel.steps.join_branches import JoinParallelBranches
 from distilabel.steps.list_to_rows import ListToRows
 from distilabel.steps.embeddings.embedding_generation import EmbeddingGeneration
 from distilabel.steps.embeddings.nearest_neighbour import FaissNearestNeighbour
@@ -56,7 +57,9 @@ from distilabel.steps.generators.huggingface import (
 )
 from distilabel.steps.generators.utils import make_generator_step
 from distilabel.steps.globals.huggingface import PushToHub
+from distilabel.steps.no_op import NoOp
 from distilabel.steps.reward_model import RewardModelScore
+from distilabel.steps.split_and_rejoin import Split, Rejoin
 from distilabel.steps.truncate import TruncateTextColumn
 from distilabel.typing import GeneratorStepOutput, StepOutput
 
@@ -80,6 +83,7 @@ __all__ = [
     "GeneratorStepOutput",
     "GlobalStep",
     "GroupColumns",
+    "JoinParallelBranches",
     "KeepColumns",
     "LoadDataFromDicts",
     "LoadDataFromDisk",
@@ -89,9 +93,12 @@ __all__ = [
     "ListToRows",
     "MergeColumns",
     "MinHashDedup",
+    "NoOp",
     "PreferenceToArgilla",
     "PushToHub",
+    "Rejoin",
     "RewardModelScore",
+    "Split",
     "Step",
     "StepInput",
     "StepOutput",

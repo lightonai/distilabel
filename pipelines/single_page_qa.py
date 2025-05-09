@@ -42,7 +42,7 @@ def run_pipeline(config: Config):
         description="Load mp synthetic data, sample system prompts and generate questions and answers",
         cache_dir='out/distilabel_cache',
     ) as pipeline:
-        ################## STAGE 0 ##################
+        ################## STAGE 0: GENERATE QUESTIONS ##################
         stage = stages[STAGE]
         load_data = LoadDataFromDicts(name="load_data", data=dataset, batch_size=128)  # cols: ['source', ...]
         # the data router handles routing the data to different lms according to the data_ratio
@@ -50,7 +50,7 @@ def run_pipeline(config: Config):
             step_distribution=[lm_config.data_ratio for lm_config in stage.lm_configs]
         )
         # initialize lms for this stage, however, they won't launch servers and stuff until they are loaded
-        lms = pipe_utils.make_lms(stage)
+        lms = pipe_utils.make_lms(config, stage)
         generate_questions = [
             lm_task_router(
                 name=f"question_generation_{i}",
@@ -79,13 +79,13 @@ def run_pipeline(config: Config):
             input_batch_size=64,
         )  # cols: ['question', ...] -> ['question', ...]
     
-        ################## STAGE 1 ##################
+        ################## STAGE 1: GENERATE ANSWERS ##################
         STAGE += 1
         stage = stages[STAGE]
         answer_data_router = pipe_utils.data_router(
             step_distribution=[lm_config.data_ratio for lm_config in stage.lm_configs]
         )
-        lms = pipe_utils.make_lms(stage)
+        lms = pipe_utils.make_lms(config, stage)
         generate_answers = [
             lm_task_router(
                 name=f"answer_generation_{i}",
@@ -93,7 +93,7 @@ def run_pipeline(config: Config):
                 lm=lm,
                 lm_config=lm.lm_config,
                 input_formatter=lm._format_input,
-                in_cols=['question'],
+                lm_input_cols=['question'],
                 input_batch_size=64,
                 resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.tp_size),
                 output_mappings={'system': 'answer_system', 'model_name': 'answer_model_name', 'generation': 'answer'},

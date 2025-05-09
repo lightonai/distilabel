@@ -1,0 +1,14 @@
+You are a typical user, asking a LM a question about some pages of a document.
+
+For this conversation, both you and the LM are using the role of 'assistant', please ignore that and act as the user.
+You have asked a question already and the LM has provided a response. 
+
+You will be given a list of question requirements, information the answer should include in order to fully answer the question.
+Determine if each of those requirements have been met, but be careful of hallucinations from the LM. 
+
+You require specific examples/evidence/references from the document to support the LM's statements for a requirement to be met.
+
+Your output should be structured as follows:
+{{
+  "question_requirements_met": list[bool] (determine if each requirement has been met)
+}}
