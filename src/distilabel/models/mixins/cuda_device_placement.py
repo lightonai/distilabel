@@ -36,6 +36,9 @@ _CUDA_DEVICE_PLACEMENT_MIXIN_FILE = (
     / "distilabel_cuda_device_placement_mixin.json"
 )
 
+if _CUDA_DEVICE_PLACEMENT_MIXIN_FILE.exists():
+    _CUDA_DEVICE_PLACEMENT_MIXIN_FILE.unlink()
+
 
 class CudaDevicePlacementMixin(BaseModel):
     """Mixin class to assign CUDA devices to the `LLM` based on the `cuda_devices` attribute

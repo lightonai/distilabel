@@ -18,14 +18,15 @@ def steps_to_load_groups(steps: list[Step], n_gpus: int) -> list[list[str]]:
     load_group_gpus = 0
     for step in steps:
         if not hasattr(step, 'resources') or step.resources.gpus is None:
-            load_group.append(step)
+            load_group.append(step.name)
             continue
         requested_gpus = step.resources.gpus * step.resources.replicas
-        assert requested_gpus <= n_gpus
+        assert requested_gpus <= n_gpus, 'No single step can use more gpus than available'
+        # Since I can't break up replicas into different load groups, you may need to make duplicate tasks so that they can be split
         if (load_group_gpus + requested_gpus) > n_gpus:
             load_groups.append(load_group)
             load_group = [step.name]
-            load_group_gpus = 0
+            load_group_gpus = requested_gpus
         else:
             load_group.append(step.name)
             load_group_gpus += requested_gpus

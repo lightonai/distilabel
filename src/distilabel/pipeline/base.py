@@ -1351,7 +1351,13 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
     def _wait_current_stage_to_finish(self) -> None:
         """Waits for the current stage to finish."""
         stage = self._current_stage
-        steps = self._steps_to_be_loaded_in_stage(stage)
+        # steps = self._steps_to_be_loaded_in_stage(stage)  # original
+
+        # The above will filter out steps that have been sent a `LAST_BATCH_SENT_FLAG`, so that below it only waits 
+        # for steps that have not been sent a `LAST_BATCH_SENT_FLAG`.
+        # However, steps don't have to actually finish unloading before other steps begin loading. 
+        # This can cause the cuda device placement to fail because e.g. stage 0 LM hasn't released GPUs before stage 1 LM starts loading.
+        steps = self._get_steps_load_stages()[0][stage]
         self._logger.info(f"⏳ Waiting for stage {stage} to finish...")
         with self._stop_called_lock:
             while not self._stop_called:
@@ -1653,7 +1659,18 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
         else:
             # Case in which the pipeline only contains a `GeneratorStep` so we constanly keep
             # requesting batch after batch as there is no downstream step to consume it
-            if len(self.dag) == 1:
+            # if len(self.dag) == 1:
+            #     self._request_batch_from_generator(step.name)  # type: ignore
+
+            # Without the following logic, this function waits for upstream steps to finish a batch, 
+            # then requests a new one from the generator. This makes it impossible to route to steps in different 
+            # load stages, becuase those steps won't complete the batch and request the next one from the generator.
+            # I believe the benefit of the original logic is 'backpressure', avoiding unneccessary memory usage from 
+            # letting the generator step run free, but we generally have enough memory. Could be an issue though.
+
+            # Modified logic: Always request the next batch from the generator
+            # unless the current batch was the last one. Should handle the len(self.dag) == 1 case.
+            if not batch.last_batch:
                 self._request_batch_from_generator(step.name)  # type: ignore
 
         self._cache()
@@ -1848,7 +1865,22 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
         if routing_batch_function := node.get(
             constants.ROUTING_BATCH_FUNCTION_ATTR_NAME
         ):
-            route_to = routing_batch_function(batch, successors)
+            # route a last batch to a step within the current stage, that way that step will finish and unload
+            # otherwise if the last batch routes to a step in a different stage, the pipeline will deadlock
+            # because steps in the current stage are waiting for the last batch or to be killed when another step 
+            # sees the last batch.
+            if batch.last_batch:
+                stages, stages_last = self._get_steps_load_stages()
+                stage = stages[self._current_stage]
+                successors_in_stage = [step for step in stage if step in set(successors)]
+                assert len(successors_in_stage) > 0, (
+                    "No successors in the current stage when routing last batch. "
+                    "This is necessary to avoid deadlocks."
+                )
+                route_to = successors_in_stage[:1]
+                routing_batch_function._register_routed_batch(batch, route_to)
+            else:
+                route_to = routing_batch_function(batch, successors)
             successors_str = ", ".join(f"'{successor}'" for successor in route_to)
             self._logger.info(
                 f"🚏 Using '{step.name}' routing function to send batch {batch.seq_no} to steps: {successors_str}"
