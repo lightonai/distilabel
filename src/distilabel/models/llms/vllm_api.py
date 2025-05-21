@@ -40,13 +40,40 @@ class vLLMAPI:
             if not self.port_in_use(port):
                 return port
 
-    def start_vllm(self, launch_vllm, timeout=120):
+    def start_vllm(self, timeout=240):
         '''Start the asynchronous vLLM server.'''
+        # ensure model is downloaded before launching vllm
+        from huggingface_hub import snapshot_download
+        snapshot_download(repo_id=self.lm_config.path)
+
+        # Build the vllm serve command as a list for subprocess
+        launch_vllm = [
+            "vllm", "serve", self.lm_config.path,
+            "--tensor-parallel-size", str(self.lm_config.tp_size),
+            "--dtype", "bfloat16",
+            "--disable-log-requests",
+            "--trust-remote-code",
+            "--gpu-memory-utilization", str(self.gmu),
+            "--port", str(self.port),
+        ]
+
+        # Add any extra vllm_args from the config
+        for k, v in getattr(self.lm_config, "vllm_kwargs", {}).items():
+            flag = f"--{k.replace('_', '-')}"
+            launch_vllm.append(flag) if v is None else launch_vllm.extend([flag, str(v)])
+
+        launch_vllm.extend([
+            ">", f"vllm_logs/{self.gpu}.txt",
+            "2>&1",
+            "&",
+            "echo", "$!",  # retrieve the PID of the actual vllm server
+        ])
+        
         print(f'[{self.gpu}] Initializing vLLM Server...')
         print('='*70)
         with utils.suppress_output(debug=False):
             process = subprocess.Popen(  # noqa: S602
-                launch_vllm,
+                ' '.join(launch_vllm),
                 shell=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,

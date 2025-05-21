@@ -12,6 +12,9 @@ from distilabel.steps.tasks import (
     Task,
     LMGenerationTask,
 )
+from distilabel.steps import (
+    NoOp,
+)
 
 from distilabel import utils
 import distilabel.utils.pipe_utils as pipe_utils
@@ -44,7 +47,7 @@ def run_pipeline(config: Config):
     ) as pipeline:
         ################## STAGE 0: GENERATE QUESTIONS ##################
         stage = stages[STAGE]
-        load_data = LoadDataFromDicts(name="load_data", data=dataset, batch_size=128)  # cols: ['source', ...]
+        load_data = LoadDataFromDicts(name="load_data", data=dataset, batch_size=32)  # cols: ['source', ...]
         # the data router handles routing the data to different lms according to the data_ratio
         data_router = pipe_utils.data_router(
             step_distribution=[lm_config.data_ratio for lm_config in stage.lm_configs]
@@ -58,7 +61,7 @@ def run_pipeline(config: Config):
                 lm=lm,
                 lm_config=lm.lm_config,
                 input_formatter=lm._format_input,
-                input_batch_size=64,
+                input_batch_size=32,
                 resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.tp_size),
                 output_mappings={'system': 'question_system', 'model_name': 'question_model_name'},
                 **lm.lm_config.task_kwargs,
@@ -68,7 +71,7 @@ def run_pipeline(config: Config):
         questions_to_rows = ListToRows(  # expand the generated list of questions into separate rows
             name="questions_to_rows",
             input_col='questions',
-            input_batch_size=64,
+            input_batch_size=32,
             output_mappings={'questions': 'question'},
             resources=StepResources(replicas=4),
         )  # cols: ['questions', ...] -> ['question', ...]
@@ -76,7 +79,7 @@ def run_pipeline(config: Config):
             name="drop_none_questions",
             cols=['question'],
             condition=utils.generation_is_structured,
-            input_batch_size=64,
+            input_batch_size=32,
         )  # cols: ['question', ...] -> ['question', ...]
     
         ################## STAGE 1: GENERATE ANSWERS ##################
@@ -94,24 +97,20 @@ def run_pipeline(config: Config):
                 lm_config=lm.lm_config,
                 input_formatter=lm._format_input,
                 lm_input_cols=['question'],
-                input_batch_size=64,
+                input_batch_size=32,
                 resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.tp_size),
                 output_mappings={'system': 'answer_system', 'model_name': 'answer_model_name', 'generation': 'answer'},
                 **lm.lm_config.task_kwargs,
             )
             for i, lm in enumerate(lms)
         ]  # cols: ['source', 'question', ...] -> ['answer', 'answer_system', 'answer_model_name', ...]
-        drop_none_answers = FilterRows(
-            name="drop_none_answers",
-            cols=['answer'],
-            condition=utils.generation_is_structured,
-            input_batch_size=64,
-        )  # cols: ['answer', ...] -> ['answer', ...]
+        
+        collect_answers = NoOp(name='collect_answers', input_batch_size=32)
 
         ## Pipeline
         (
             load_data >> data_router >> generate_questions >> questions_to_rows >> drop_none_questions >>
-            answer_data_router >> generate_answers >> drop_none_answers
+            answer_data_router >> generate_answers >> collect_answers
         )
     
     distiset = pipeline.run(
@@ -122,7 +121,7 @@ def run_pipeline(config: Config):
                 len(stage.available_gpus),
             ) + 
             pipe_utils.steps_to_load_groups(
-                [*generate_answers, drop_none_answers],
+                [*generate_answers, collect_answers],
                 len(stage.available_gpus),
             )
         ),

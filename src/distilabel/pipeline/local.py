@@ -12,9 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import functools
 import multiprocessing as mp
 import signal
 import sys
+import time
 from multiprocessing.pool import Pool
 from typing import (
     TYPE_CHECKING,
@@ -30,7 +32,7 @@ from typing import (
 
 import tblib
 
-from distilabel.constants import SIGINT_HANDLER_CALLED_ENV_NAME
+from distilabel.constants import INPUT_QUEUE_ATTR_NAME, SIGINT_HANDLER_CALLED_ENV_NAME
 from distilabel.distiset import create_distiset
 from distilabel.exceptions import DistilabelOfflineBatchGenerationNotFinishedException
 from distilabel.pipeline.base import BasePipeline, set_pipeline_running_env_variables
@@ -38,6 +40,7 @@ from distilabel.pipeline.ray import RayPipeline
 from distilabel.pipeline.step_wrapper import _StepWrapper, _StepWrapperException
 from distilabel.utils.logging import setup_logging, stop_logging
 from distilabel.utils.ray import script_executed_in_ray_cluster
+from distilabel import constants
 
 if TYPE_CHECKING:
     import logging
@@ -48,6 +51,80 @@ if TYPE_CHECKING:
     from distilabel.typing import InputDataset, LoadGroups
 
 _SUBPROCESS_EXCEPTION: Union[Exception, None] = None
+
+
+class ManagedListQueue:
+    """
+    A queue-like class that uses a multiprocessing.Manager().list() for storage
+    and a multiprocessing.Manager().Condition() for synchronization.
+    It provides 'put', 'get', 'qsize', 'empty', and an 'items' method for
+    non-consuming inspection of all current items.
+
+    The reason for the class is a shared interface with the Ray version and 
+    the items method which is used to read the 'queue' contents.
+    """
+
+    def __init__(self, mp_list, condition, maxsize: int = 0):
+        self._maxsize = maxsize
+        self._list = mp_list
+        self._condition = condition
+
+    def qsize(self) -> int:
+        with self._condition:
+            return len(self._list)
+
+    def empty(self) -> bool:
+        with self._condition:
+            return not self._list
+
+    def full(self) -> bool:
+        if self._maxsize <= 0:
+            return False
+        with self._condition:
+            return len(self._list) >= self._maxsize
+
+    def put(self, item: Any, block: bool = True, timeout: Optional[float] = None) -> None:
+        with self._condition:
+            if self._maxsize > 0:
+                if not block:
+                    if self.full():
+                        raise mp.queues.Full
+                elif timeout is None:
+                    while self.full():
+                        self._condition.wait()
+                else:
+                    endtime = time.monotonic() + timeout
+                    while self.full():
+                        remaining = endtime - time.monotonic()
+                        if remaining <= 0.0:
+                            raise mp.queues.Full
+                        self._condition.wait(remaining)
+            self._list.append(item)
+            self._condition.notify()
+
+    def get(self, block: bool = True, timeout: Optional[float] = None) -> Any:
+        with self._condition:
+            if not block:
+                if self.empty():
+                    raise mp.queues.Empty
+            elif timeout is None:
+                while self.empty():
+                    self._condition.wait()
+            else:
+                endtime = time.monotonic() + timeout
+                while self.empty():
+                    remaining = endtime - time.monotonic()
+                    if remaining <= 0.0:
+                        raise mp.queues.Empty
+                    self._condition.wait(remaining)
+            item = self._list.pop(0)
+            self._condition.notify()
+            return item
+
+    def items(self) -> List[Any]:
+        """Returns a *copy* (snapshot) of all items currently in the list."""
+        with self._condition:
+            return list(self._list)
 
 
 def _init_worker(
@@ -208,7 +285,7 @@ class Pipeline(BasePipeline):
             )
 
         self._log_queue = cast("Queue[Any]", mp.Queue())
-
+        
         if distiset := super().run(
             parameters=parameters,
             load_groups=load_groups,
@@ -265,16 +342,25 @@ class Pipeline(BasePipeline):
         return distiset
 
     @property
-    def QueueClass(self) -> Callable:
+    def QueueClass(self) -> Callable[..., ManagedListQueue]:
         """The callable used to create the input and output queues.
 
         Returns:
-            The callable to create a `Queue`.
+            The callable to create a `ManagedListQueue`.
         """
-        assert self._manager, "Manager is not initialized"
-        return self._manager.Queue
+        assert self._manager is not None, "Manager is not initialized before QueueClass access"
+        return functools.partial(
+            ManagedListQueue, 
+            mp_list=self._manager.list(), 
+            condition=self._manager.Condition()
+        )
 
-    def _run_step(self, step: "_Step", input_queue: "Queue[Any]", replica: int) -> None:
+    def _create_step_input_queue(self, step_name: str) -> ManagedListQueue:
+        input_queue = self.QueueClass()
+        self.dag.set_step_attr(step_name, INPUT_QUEUE_ATTR_NAME, input_queue)
+        return input_queue
+
+    def _run_step(self, step: "_Step", input_queue: ManagedListQueue, replica: int) -> None:
         """Runs the `Step` wrapped in a `_ProcessWrapper` in a separate process of the
         `Pool`.
 
@@ -293,6 +379,7 @@ class Pipeline(BasePipeline):
             load_queue=self._load_queue,
             dry_run=self._dry_run,
             ray_pipeline=False,
+            is_route_step=self.dag.is_route_step(step.name),
         )
 
         self._pool.apply_async(step_wrapper.run, error_callback=self._error_callback)

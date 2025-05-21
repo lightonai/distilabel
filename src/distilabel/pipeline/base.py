@@ -17,6 +17,7 @@ import os
 import shutil
 import signal
 import threading
+from multiprocessing.synchronize import Lock
 import time
 from abc import ABC, abstractmethod
 from inspect import isclass
@@ -38,6 +39,7 @@ import fsspec
 from pydantic import BaseModel
 from typing_extensions import Self
 from upath import UPath
+import time
 
 from distilabel import __version__, constants, envs
 from distilabel.distiset import create_distiset
@@ -59,7 +61,7 @@ from distilabel.utils.typing_ import (
     extract_annotation_inner_type,
     is_type_pydantic_secret_field,
 )
-
+from distilabel.utils import read_queue
 if TYPE_CHECKING:
     from os import PathLike
     from queue import Queue
@@ -211,6 +213,8 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
         self._steps_load_status: Dict[str, int] = {}
         self._steps_load_status_lock = threading.Lock()
 
+        self._register_last_batch_steps: set[str] = set()
+
         self._stop_called = False
         self._stop_called_lock = threading.Lock()
         self._stop_calls = 0
@@ -233,6 +237,14 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
         self._exception: Union[Exception, None] = None
 
         self._log_queue: Union["Queue[Any]", None] = None
+
+        # For logging deltas
+        self._prev_batch_manager_counts: Dict[str, int] = {}
+        self._prev_input_queue_counts: Dict[str, int] = {}
+        self._prev_output_queue_count: int = 0
+        self._prev_total_batch_count: int = 0
+        self._received_batches: List["_Batch"] = []
+        self._sent_batches = []
 
     def __enter__(self) -> Self:
         """Set the global pipeline instance when entering a pipeline context."""
@@ -1062,11 +1074,27 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
 
         if not self._initialize_pipeline_execution():
             return
-
+        
+        time_at_last_batch = time.time()
         while self._should_continue_processing():  # type: ignore
             self._logger.debug("Waiting for output batch from step...")
-            if (batch := self._output_queue.get()) is None:
-                self._logger.debug("Received `None` from output queue. Breaking loop.")
+            continue_loop = True
+            continue_breakpoint_loop = True
+            while continue_breakpoint_loop:
+                try:
+                    if (batch := self._output_queue.get(timeout=15)) is None:
+                        self._logger.debug("Received `None` from output queue. Breaking loop.")
+                        continue_loop = False
+                    continue_breakpoint_loop = False
+                    time_at_last_batch = time.time()
+                except Exception as e:
+                    if (time.time() - time_at_last_batch) > constants.OUTPUT_QUEUE_TIMEOUT:
+                        self._logger.debug("Timeout waiting for output batch. Breaking loop.")
+                        continue_breakpoint_loop = False
+                        continue_loop = False
+                    else:
+                        continue
+            if not continue_loop:
                 break
 
             self._logger.debug(
@@ -1074,7 +1102,10 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
                 f" from output queue: {batch}"
             )
 
+            self._received_batches.append(batch.copy())
             self._process_batch(batch)
+
+            self._logger.debug(self._detailed_batch_manager_and_queue_state_msg(batch))
 
             # If `_stop_called` was set to `True` while waiting for the output queue, then
             # we need to handle the stop of the pipeline and break the loop to avoid
@@ -1085,6 +1116,8 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
                     self._handle_batch_on_stop(batch)
                     break
 
+            self._manage_batch_flow(batch)
+
             # If there is another load stage and all the `last_batch`es from the stage
             # have been received, then load the next stage.
             if self._should_load_next_stage():
@@ -1092,7 +1125,6 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
                 if not self._update_stage():
                     break
 
-            self._manage_batch_flow(batch)
 
         self._finalize_pipeline_execution()
 
@@ -1131,6 +1163,27 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
         with self._stop_called_lock:
             return self._batch_manager.can_generate() and not self._stop_called  # type: ignore
 
+    def _stage_has_batches_to_process(self) -> bool:
+        """Returns if the current stage has batches to process.
+
+        Returns:
+            `True` if the current stage has batches to process, `False` otherwise.
+        """
+        load_stages, _ = self._get_steps_load_stages()
+        for step_name in load_stages[self._current_stage]:
+            if (
+                sum(len(v) for v in self._batch_manager._steps[step_name].data.values()) > 0
+                or len(
+                    [
+                        batch for batch in self._steps_input_queues[step_name].items()
+                        if batch not in [None, constants.LAST_BATCH_SENT_FLAG]
+                    ]
+                ) > 0
+            ):
+                return True
+
+        return False
+
     def _process_batch(
         self, batch: "_Batch", send_last_batch_flag: bool = True
     ) -> None:
@@ -1148,18 +1201,27 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
         if batch.step_name in self.dag.leaf_steps:
             self._write_buffer.add_batch(batch)  # type: ignore
 
-        if batch.last_batch:
-            self._register_stages_last_batch(batch)
+        if batch.last_batch or batch.route_step_last_batch:
+            self._register_stages_last_batch(batch.step_name)
+            # last batch flag has been sent already, when that step is done, register that the last batch flag has been sent
+            # which is used to determine if the step is dead in other places
+            if batch.step_name in self._register_last_batch_steps:
+                self._register_last_batch_steps.remove(batch.step_name)
+                self._batch_manager.set_last_batch_flag_sent_to(batch.step_name)  # type: ignore
 
+        if batch.route_step_last_batch:
+            conv_step = list(self.dag.get_step_successors(batch.step_name))[0]
+            self._batch_manager.set_n_batches_to_receive(conv_step, batch.step_name, batch.seq_no + 1)
+
+        if batch.last_batch and send_last_batch_flag:
             # Make sure to send the `LAST_BATCH_SENT_FLAG` to the predecessors of the step
             # if the batch is the last one, so they stop their processing loop even if they
             # haven't received the last batch because of the routing function.
-            if send_last_batch_flag:
-                for step_name in self.dag.get_step_predecessors(batch.step_name):
-                    if self._is_step_running(step_name):
-                        self._send_last_batch_flag_to_step(step_name)
-                if self._is_step_running(batch.step_name):
-                    self._send_last_batch_flag_to_step(batch.step_name)
+            steps_to_kill = list(self.dag.get_step_predecessors(batch.step_name))
+
+            for step_name in steps_to_kill:
+                if self._is_step_running(step_name):
+                    self._send_last_batch_flag_to_step(step_name)
 
     def _set_step_for_recovering_offline_batch_generation(
         self, step: "_Step", data: List[List[Dict[str, Any]]]
@@ -1198,7 +1260,7 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
             data=data,
         )
 
-    def _register_stages_last_batch(self, batch: "_Batch") -> None:
+    def _register_stages_last_batch(self, step_name: str) -> None:
         """Registers the last batch received from a step in the `_stages_last_batch`
         dictionary.
 
@@ -1207,8 +1269,8 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
         """
         _, stages_last_steps = self._get_steps_load_stages()
         stage_last_steps = stages_last_steps[self._current_stage]
-        if batch.step_name in stage_last_steps:
-            self._stages_last_batch[self._current_stage].append(batch.step_name)
+        if step_name in stage_last_steps:
+            self._stages_last_batch[self._current_stage].append(step_name)
             self._stages_last_batch[self._current_stage].sort()
 
     def _update_stage(self) -> bool:
@@ -1218,7 +1280,13 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
         Returns:
             `True` if updating the stage went OK, `False` otherwise.
         """
+        _, stage_last_steps = self._get_steps_load_stages()
         self._current_stage += 1
+        stage_exists = True  # for this first stage, it has been checked before this function was called
+        while stage_exists and not self._stage_has_batches_to_process():
+            self._current_stage += 1
+            stage_exists = self._current_stage < len(stage_last_steps)
+        
         if not self._run_stage_steps_and_wait(stage=self._current_stage):
             self._set_steps_not_loaded_exception()
             return False
@@ -1625,7 +1693,18 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
             next_expected_seq_no=batch.seq_no + 1,
         )
 
+        successors = list(self.dag.get_step_successors(batch.step_name))
+        self._set_global_next_seq_no(
+            successors=successors, 
+            received_seq_no=batch.seq_no,
+        )
+
+        if batch.last_batch:
+            self._notify_route_steps_of_last_batch(successors)
+
         step = self._get_step_from_batch(batch)
+
+        from copy import deepcopy
 
         # Add the batch to the successors input buffers
         for successor in route_to:
@@ -1642,17 +1721,21 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
                 and step.name in self._batch_manager.step_empty_buffers(successor)
             ):
                 last_batch_sent = self._batch_manager.get_last_batch_sent(step.name)
-                self._send_batch_to_step(last_batch_sent.next_batch())  # type: ignore
+                b = last_batch_sent.next_batch()
+                self._sent_batches.append(deepcopy(b))
+                self._send_batch_to_step(b)  # type: ignore
 
             # If successor step has enough data in its buffer to create a new batch, then
             # send the batch to the step.
             while new_batch := self._batch_manager.get_batch(successor):
+                self._sent_batches.append(deepcopy(new_batch))
                 self._send_batch_to_step(new_batch)
 
         if not step.is_generator:
             # Step ("this", the one from which the batch was received) has enough data on its
             # buffers to create a new batch
             while new_batch := self._batch_manager.get_batch(step.name):  # type: ignore
+                self._sent_batches.append(deepcopy(new_batch))
                 self._send_batch_to_step(new_batch)
             else:
                 self._request_more_batches_if_needed(step)
@@ -1673,6 +1756,10 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
             if not batch.last_batch:
                 self._request_batch_from_generator(step.name)  # type: ignore
 
+        if batch.last_batch:
+            self._clear_batch_manager_route_steps(successors)
+        
+        self._handle_router_last_batch(batch)
         self._cache()
 
     def _send_to_step(self, step_name: str, to_send: Any) -> None:
@@ -1713,6 +1800,51 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
             f"Sending batch {batch.seq_no} to step '{batch.step_name}': {batch}"
         )
         self._send_to_step(batch.step_name, batch)
+
+        if self.dag.is_route_step(batch.step_name):
+            conv_step = list(self.dag.get_step_successors(batch.step_name))[0]
+            self._batch_manager.set_convergence_step_receives_from(conv_step, batch.step_name)
+            if batch.last_batch:
+                self._batch_manager.set_convergence_step_receives_from(conv_step, 'last_batch_routed')
+                route_steps_used = self._batch_manager.convergence_step_receives_from(conv_step)
+                co_route_steps = list(self.dag.get_step_predecessors(conv_step))
+                for route_step in [s for s in co_route_steps if s not in route_steps_used]:
+                    self._register_stages_last_batch(route_step)
+
+    def _clear_batch_manager_route_steps(self, successors: List[str]) -> None:
+        """Call after route steps have been notified of the last batch.
+        This will let any last batches from the batch manager be forwarded 
+        to the route steps. (which should be forced by the notification of the last batch)
+        """
+        from copy import deepcopy
+        for step in successors:
+            if self.dag.is_route_step(step):
+                while new_batch := self._batch_manager.get_batch(step):
+                    self._sent_batches.append(deepcopy(new_batch))
+                    self._send_batch_to_step(new_batch)
+
+    def _handle_router_last_batch(self, received_batch: "_Batch") -> None:
+        """If a router step has finished its last batch, send LAST_BATCH_FLAG_SENT flags to
+        all the successors of the router step (the route steps). Should be called after 
+        sending the next batch, so that the flags come after the last batch from this step.
+        Should also follow _clear_batch_manager_route_steps to ensure all the route steps
+        have all batches in their input queues.
+
+        Args:
+            received_batch: The batch that was received by the output queue.
+        """
+        # if this step that just finished its last batch is a router, send last batch flags to
+        # all the route steps
+        if received_batch.last_batch:
+            steps_to_kill = []
+            if self.dag.is_routing_step(received_batch.step_name):
+                steps_to_kill += list(self.dag.get_step_successors(received_batch.step_name))
+            for step_name in steps_to_kill:
+                # send the last batch flag to all the replicas of the step
+                # don't register them yet because then they won't be loaded and run
+                for _ in range(self.dag.get_step_replica_count(step_name)):
+                    self._send_to_step(step_name, constants.LAST_BATCH_SENT_FLAG)
+                self._register_last_batch_steps.add(step_name)
 
     def _gather_requirements(self) -> List[str]:
         """Extracts the requirements from the steps to be used in the pipeline.
@@ -1865,19 +1997,20 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
         if routing_batch_function := node.get(
             constants.ROUTING_BATCH_FUNCTION_ATTR_NAME
         ):
-            # route a last batch to a step within the current stage, that way that step will finish and unload
-            # otherwise if the last batch routes to a step in a different stage, the pipeline will deadlock
-            # because steps in the current stage are waiting for the last batch or to be killed when another step 
-            # sees the last batch.
+            # route the last batch to the next successor to run, that way it will get that batch,
+            # complete itself and send last batch flags to the others. If it is instead sent to a later step,
+            # there may be another routing step, say in its own stage, running next which won't see a last batch
+            # or last batch flag and so will wait indefinitely.
             if batch.last_batch:
                 stages, stages_last = self._get_steps_load_stages()
-                stage = stages[self._current_stage]
-                successors_in_stage = [step for step in stage if step in set(successors)]
-                assert len(successors_in_stage) > 0, (
-                    "No successors in the current stage when routing last batch. "
-                    "This is necessary to avoid deadlocks."
-                )
-                route_to = successors_in_stage[:1]
+                next_successor = None
+                for stage in stages:
+                    for step_name in stage:
+                        if step_name in set(successors):
+                            next_successor = step_name
+                            break
+                    if next_successor: break
+                route_to = [next_successor]
                 routing_batch_function._register_routed_batch(batch, route_to)
             else:
                 route_to = routing_batch_function(batch, successors)
@@ -1911,6 +2044,19 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
                 from_step=from_step,
                 next_expected_seq_no=next_expected_seq_no,
             )
+
+    def _set_global_next_seq_no(self, successors: List[str], received_seq_no: int) -> None:
+        """Sets a shared next expected sequence number for the successors of a step.
+        This tracks the seq_no for which all batches with lower seq_no have been received.
+        """
+        for step in successors:
+            self._batch_manager.set_global_next_seq_no(step, received_seq_no)
+
+    def _notify_route_steps_of_last_batch(self, successors: List[str]) -> None:
+        """Notifies the route steps in the batch manager that the last batch has been received."""
+        for step in successors:
+            if self.dag.is_route_step(step):
+                self._batch_manager.notify_route_step_of_last_batch(step)
 
     @abstractmethod
     def _teardown(self) -> None:
@@ -1956,6 +2102,57 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
             self._stop()
 
         return signal.signal(signal.SIGINT, signal_handler)
+
+    def _detailed_batch_manager_and_queue_state_msg(self, batch: "_Batch") -> str:
+        batch_count = 0
+        log_msg = '\n' + '=' * 50 + '\n'
+        log_msg += '############################## BATCH ##############################\n'
+        log_msg += f'{batch=}\n'
+        log_msg += '############################## BATCH MANAGER ##############################\n'
+
+        current_batch_manager_counts: Dict[str, int] = {}
+        for step_name in self._batch_manager._steps.keys():
+            if step_name == 'load_data': continue
+            bm_step = self._batch_manager._steps[step_name]
+            grouped_batches = bm_step._group_batches_by_created_from()
+            l = sum(len(v[1]) for v in grouped_batches)
+            current_batch_manager_counts[step_name] = l
+            delta = l - self._prev_batch_manager_counts.get(step_name, 0)
+            s = '\n'.join(str(v) for v in grouped_batches)
+            log_msg += f'{step_name=} | abs: {l} (delta: {delta:+}d) | {bm_step.next_expected_seq_no=} | {bm_step.global_next_seq_no=} | {bm_step.next_expected_created_from_batch_seq_no=}\n{s}\n\n'
+            batch_count += l
+        self._prev_batch_manager_counts = current_batch_manager_counts
+
+        log_msg += '############################## INPUT QUEUES ##############################\n'
+        current_input_queue_counts: Dict[str, int] = {}
+        for step_name, queue_obj in self._steps_input_queues.items():
+            if step_name == 'load_data': continue
+            q_items = queue_obj.items()
+            q_len = len(q_items)
+            current_input_queue_counts[step_name] = q_len
+            delta = q_len - self._prev_input_queue_counts.get(step_name, 0)
+            log_msg += f'{step_name=} | abs: {q_len} (delta: {delta:+}d) |\n{q_items}\n\n'
+            batch_count += len([b for b in q_items if b not in [None, constants.LAST_BATCH_SENT_FLAG]])
+        self._prev_input_queue_counts = current_input_queue_counts
+
+        log_msg += '############################## OUTPUT QUEUE ##############################\n'
+        output_q_list = self._output_queue.items()
+        output_q_len = len(output_q_list)
+        output_q_delta = output_q_len - self._prev_output_queue_count
+        log_msg += f'output_queue | abs: {output_q_len} (delta: {output_q_delta:+}d) |\n{output_q_list}\n\n'
+        self._prev_output_queue_count = output_q_len
+        batch_count += len([b for b in output_q_list if b not in [None, constants.LAST_BATCH_SENT_FLAG]])
+
+        total_batch_count_delta = batch_count - self._prev_total_batch_count
+        log_msg += f'batch_count: abs: {batch_count} (delta: {total_batch_count_delta:+}d)\n'
+        self._prev_total_batch_count = batch_count
+
+        log_msg += '############################## STAGES LAST BATCHES ##############################\n'
+        _, stages_last_steps = self._get_steps_load_stages()
+        stage_last_steps = stages_last_steps[self._current_stage]
+        log_msg += f'{self._stages_last_batch=}\n{stage_last_steps=}\n'
+        log_msg += '=' * 50
+        return log_msg
 
 
 def set_pipeline_running_env_variables(

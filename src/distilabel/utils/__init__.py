@@ -43,6 +43,11 @@ from .misc import (
     add_split_label,
     is_openai_model_name,
     suppress_output,
+    clean_structured_output,
+    sort_adjacent_pages,
+    replace_source_col,
+    randomize_source_order,
+    read_queue,
 )
 
 __all__ = [
@@ -74,4 +79,9 @@ __all__ = [
     "add_split_label",
     "is_openai_model_name",
     "suppress_output",
+    "clean_structured_output",
+    "sort_adjacent_pages",
+    "replace_source_col",
+    "randomize_source_order",
+    "read_queue",
 ]

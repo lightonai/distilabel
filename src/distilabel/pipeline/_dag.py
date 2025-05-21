@@ -266,9 +266,31 @@ class DAG(_Serializable):
         """
         predecessors = list(self.get_step_predecessors(step_name))
         return all(
-            self.get_step(predecessor).get(RECEIVES_ROUTED_BATCHES_ATTR_NAME, False)
+            self.is_route_step(predecessor)
             for predecessor in predecessors
         )
+
+    def is_route_step(self, step_name: str) -> bool:
+        """Checks if a step is a route step.
+
+        Args:
+            step_name: The name of the step.
+
+        Returns:
+            True if the step is a route step, False otherwise.
+        """
+        return self.get_step(step_name).get(RECEIVES_ROUTED_BATCHES_ATTR_NAME, False)
+
+    def is_routing_step(self, step_name: str) -> bool:
+        """Checks if a step is a routing step (has a routing batch function).
+
+        Args:
+            step_name: The name of the step.
+
+        Returns:
+            True if the step is a routing step, False otherwise.
+        """
+        return self.get_step(step_name).get(ROUTING_BATCH_FUNCTION_ATTR_NAME, None) is not None
 
     def step_in_last_trophic_level(self, step_name: str) -> bool:
         """Checks if a step is in the last trophic level.

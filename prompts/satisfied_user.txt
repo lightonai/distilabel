@@ -8,7 +8,7 @@ Determine if each of those requirements have been met, but be careful of halluci
 
 You require specific examples/evidence/references from the document to support the LM's statements for a requirement to be met.
 
-Your output should be structured as follows:
+Here is the output format, provide nothing except this:
 {{
   "question_requirements_met": list[bool] (determine if each requirement has been met)
 }}

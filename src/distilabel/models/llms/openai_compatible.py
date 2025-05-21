@@ -118,13 +118,12 @@ def structured_output(agenerate: Callable) -> Callable:
             )
             if self.lm_config.out_model is None:  # allow for no pydantic model
                 return generate_output
-            ## attempt to format with pydantic, being careful to unhide the system prompt
             try:
                 # assume only one generation
                 generate_output['generations'][0] = self.lm_config.out_model.model_validate_json(
-                    generate_output['generations'][0], 
+                    utils.clean_structured_output(generate_output['generations'][0]), 
                     strict=True
-                ).model_dump_json()  
+                ).model_dump_json()
                 # if your pydantic model allows extra fields, no worries, they will be dropped
 
                 return generate_output
@@ -171,9 +170,6 @@ class OpenAILM(OpenAILLM, CudaDevicePlacementMixin, VLM):
             self.api_key = os.getenv('XAI_API_KEY')
         else:
             self.use_vllm = True
-            # ensure model is downloaded before launching vllm
-            from huggingface_hub import snapshot_download
-            snapshot_download(repo_id=self.lm_config.path)
 
             self._vllm_api = vLLMAPI(self.lm_config)
             self.base_url = f'http://localhost:{self._vllm_api.port}/v1'
@@ -183,23 +179,15 @@ class OpenAILM(OpenAILLM, CudaDevicePlacementMixin, VLM):
         # must come after the base_url is set properly
         super().load()
         VLM.load(self)
+        self.disable_cuda_device_placement = not self.lm_config.tp_size
         CudaDevicePlacementMixin.load(self)
         
         # must come after CUDA_VISIBLE_DEVICES is set properly
         if self.use_vllm and not self.debug_with_running_vllm:
+            # I want this to throw an error because the visible devices should be set by the placement mixin
             gpu = os.environ['CUDA_VISIBLE_DEVICES'].split(',')[0]
-            launch_vllm = (
-                f'vllm serve {self.lm_config.path} '
-                f'--tensor-parallel-size {self.lm_config.tp_size} '
-                '--dtype bfloat16 '
-                '--disable-log-requests '
-                '--trust-remote-code '
-                f'--gpu-memory-utilization {self._vllm_api.gmu} '
-                f'--port {self._vllm_api.port} > vllm_logs/{gpu}.txt '
-                '2>&1 & echo $!' # echo is for reading the PID
-            )
             self._vllm_api.gpu = gpu
-            self._vllm_api.start_vllm(launch_vllm)
+            self._vllm_api.start_vllm()
 
     def _assign_cuda_devices(self):
         '''Override the default cuda device assignment to only assign to the available gpus'''
@@ -237,6 +225,11 @@ class OpenAILM(OpenAILLM, CudaDevicePlacementMixin, VLM):
             return completion
         
         completion = await _generate()
+        if completion is None:
+            return GenerateOutput(
+                generations=[None],
+                statistics={'input_tokens': [0], 'output_tokens': [0]},
+            )
         return self._generations_from_openai_completion(completion)
 
     # also cleanup vLLM

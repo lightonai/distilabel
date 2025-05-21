@@ -42,7 +42,7 @@ class LMConfig(BaseModel):
 
     ## task section
     data_ratio: float = 1.0
-    '''ratio of the data for this model to generate'''
+    '''ratio of the data for this model to generate, doesn't have to be normalized, as it goes to random.choices(weights=...)'''
     task_name: str | None = None
     '''name of the task the model is used for, use this in your pipeline to map the lm_config to the task'''
     task_kwargs: dict[str, Any] = {}
@@ -67,6 +67,8 @@ class LMConfig(BaseModel):
     '''number of gpus to use for the model, applies if using vllm'''
     replicas: int = 1
     '''number of replicas to create'''
+    vllm_kwargs: dict[str, Any] = {}
+    '''kwargs passed directly to vllm. Use None as a value if the kwarg is just a flag'''
 
     def model_post_init(self, context) -> None:
         if isinstance(self.out_model, str):
@@ -118,8 +120,6 @@ class Config(BaseModel):
 
 class SinglePageQuestions(BaseModel):
     '''Config for the single page questions output format'''
-    key_ideas: str
-    key_details: str
     questions: list[str]
 
 class MultiPageQuestions(BaseModel):

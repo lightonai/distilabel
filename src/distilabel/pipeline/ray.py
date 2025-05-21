@@ -35,6 +35,93 @@ if TYPE_CHECKING:
     from distilabel.steps.base import _Step
     from distilabel.typing import InputDataset, LoadGroups
 
+import collections
+import ray
+from ray.util.queue import Queue as RayQueue
+
+
+@ray.remote
+class _InspectableQueueActor:
+    """
+    Internal Ray actor for InspectableRayQueue.
+    It wraps a collections.deque to provide queue functionality
+    and an additional method to peek at all items.
+    """
+
+    def __init__(self, maxsize: int = 0):
+        self.maxsize = maxsize
+        self.queue = collections.deque() # type: ignore
+        # Code below is adapted from ray.util.queue._QueueActor
+        self._put_event = ray.async_cs.Event() # type: ignore
+        self._get_event = ray.async_cs.Event() # type: ignore
+        if maxsize > 0:
+            self._get_event.set()
+
+    def qsize(self) -> int:
+        return len(self.queue)
+
+    def empty(self) -> bool:
+        return not self.queue
+
+    def full(self) -> bool:
+        if self.maxsize <= 0:
+            return False
+        return self.qsize() >= self.maxsize
+
+    async def put(self, item: Any, timeout: Optional[float] = None) -> None:
+        if self.maxsize > 0:
+            if not await self._put_event.wait_for( # type: ignore
+                self.qsize, self.maxsize, timeout=timeout
+            ):
+                raise ray.exceptions.Full("Queue full") # type: ignore
+        self.queue.append(item)
+        self._get_event.set()
+        if self.maxsize > 0 and self.qsize() >= self.maxsize:
+            self._put_event.clear()
+
+    async def get(self, timeout: Optional[float] = None) -> Any:
+        if not await self._get_event.wait_for( # type: ignore
+            self.qsize, 0, compare_op=">", timeout=timeout
+        ):
+            raise ray.exceptions.Empty("Queue empty") # type: ignore
+        item = self.queue.popleft()
+        self._put_event.set()
+        if self.qsize() == 0:
+            self._get_event.clear()
+        return item
+
+    def _peek_all_items(self) -> List[Any]:
+        """Returns a copy of all items in the queue without removing them."""
+        return list(self.queue)
+
+
+class InspectableRayQueue(RayQueue):
+    """
+    A Ray Queue that allows for non-consuming inspection of its contents.
+    It uses a custom actor (_InspectableQueueActor) to achieve this.
+    """
+
+    def __init__(
+        self, maxsize: int = 0, actor_options: Optional[Dict[str, Any]] = None
+    ):
+        if actor_options is None:
+            actor_options = {}
+        # This slightly diverges from RayQueue's direct _creation_method use,
+        # as we need to instantiate our specific actor.
+        self.actor = _InspectableQueueActor.options(  # type: ignore
+            **actor_options
+        ).remote(maxsize)
+
+    def items(self) -> List[Any]:
+        """
+        Returns a list of all items currently in the queue without consuming them.
+        This is a blocking call.
+        """
+        return ray.get(self.actor._peek_all_items.remote())
+
+    # qsize, empty, full, put, get are inherited from RayQueue,
+    # which routes them to the actor. We've implemented these on our actor.
+
 
 class RayPipeline(BasePipeline):
     """Ray pipeline implementation allowing to run a pipeline in a Ray cluster."""
@@ -236,12 +323,10 @@ class RayPipeline(BasePipeline):
         return gpus_per_node
 
     @property
-    def QueueClass(self) -> Callable:
-        from ray.util.queue import Queue
+    def QueueClass(self) -> Callable[..., "InspectableRayQueue"]: # type: ignore
+        return InspectableRayQueue
 
-        return Queue
-
-    def _create_step_input_queue(self, step_name: str) -> "Queue[Any]":
+    def _create_step_input_queue(self, step_name: str) -> "InspectableRayQueue": # type: ignore
         """Creates an input queue for a step. Override to set actor name.
 
         Args:
@@ -306,7 +391,7 @@ class RayPipeline(BasePipeline):
             if step.resources.resources is not None:
                 resources["resources"] = step.resources.resources
 
-        _StepWrapperRay = _StepWrapperRay.options(**resources)  # type: ignore
+        _StepWrapperRay = _StepWrapperRay.options(**resources)
 
         self._logger.debug(
             f"Creating Ray actor for '{step.name}' (replica ID: {replica}) with resources:"

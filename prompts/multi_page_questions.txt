@@ -18,10 +18,10 @@ Important guidelines:
 - Questions should be clear, specific, and focused
 - Questions should encourage detailed responses that demonstrate understanding of multiple pages
 
-Your output should be structured as follows:
+Here is the output format, provide nothing except this:
 {{
-  "analysis": "Your detailed chain of thought showing how you analyzed the pages and created questions",
-  "questions": ["Question 1", "Question 2", "Question 3", ...]
+  "analysis": str ("Your detailed chain of thought showing how you analyzed the pages and created questions"),
+  "questions": list[str] (["Question 1", ...])
 }}
 
 You are asked to generate {n_questions} questions. 

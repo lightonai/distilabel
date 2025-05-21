@@ -7,9 +7,12 @@ from contextlib import contextmanager
 from io import StringIO
 import sys
 import re
-from typing import Callable
+import random
+from queue import Queue
+from typing import Callable, List, Any
 from datasets import Dataset
 from pathlib import Path
+from copy import deepcopy
 
 from .image import get_image, downsample_image, b64_encode_image
 
@@ -121,14 +124,37 @@ def add_cols_to_split(distiset: Dataset, split: Dataset, cols: list[str]):
     
     return Dataset.from_list(updated_rows)
 
+def add_split_label(dataset: list[dict], split: str) -> list[dict]:
+    '''Add a split label to a dataset given as a list of dicts'''
+    return [{**row, 'split': split} for row in dataset]
+
+def sort_adjacent_pages(dataset: list[dict]) -> list[dict]:
+    '''Sort the 'source' col containing adjacent pages in a dataset given as a list of dicts'''
+    return [
+        row | {'source': sorted(row['source'], key=pdf_page)}
+        for row in dataset
+    ]
+
+def randomize_source_order(dataset: list[dict]) -> list[dict]:
+    '''Randomize the order of the 'source' col in a dataset given as a list of dicts'''
+    return [
+        row | {'source': random.sample(row['source'], len(row['source']))}
+        for row in dataset
+    ]
+
+def replace_source_col(distiset: Dataset, dataset: list[dict]):
+    '''
+    Replace the source col of the distiset with the source col of the dataset
+    to retain the original order
+    '''
+    map_to_source = {frozenset(row['source']): row['source'] for row in dataset}
+    distiset = distiset.map(lambda x: {'source': map_to_source[frozenset(x['source'])]}, num_proc=64)
+    return distiset
+
 # define this as a function to make it pickleable
 def generation_is_structured(row: dict, cols: list[str]) -> bool:
     '''Bool indicator of whether any of the cols are None'''
     return all([row[col] is not None for col in cols])
-
-def add_split_label(dataset: list[dict], split: str) -> list[dict]:
-    '''Add a split label to a dataset given as a list of dicts'''
-    return [{**row, 'split': split} for row in dataset]
 
 def load_pydantic(path, config_class):
     '''load yaml config and convert into pydantic config'''
@@ -166,3 +192,15 @@ def source_to_msg(source: str | list[str], max_dims: tuple[int, int], msg_conten
             content.append(msg_content_img(b64_img))
             
         return {'role': 'user', 'content': content}
+
+def clean_structured_output(output: str) -> str:
+    '''Remove some common and basic formatting errors.'''
+    output = output.replace('```json', '').replace('```', '')
+    return output
+
+def read_queue(queue: Queue, lock: Any) -> List:
+    with lock:
+        contents = [queue.get() for _ in range(queue.qsize())]
+        for batch in contents:
+            queue.put(batch)
+    return contents

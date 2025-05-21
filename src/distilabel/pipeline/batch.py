@@ -48,6 +48,7 @@ class _Batch(_Serializable):
     seq_no: int
     step_name: str
     last_batch: bool
+    route_step_last_batch: bool = False
     data: List[List[Dict[str, Any]]] = field(default_factory=list, repr=False)
     data_hash: Optional[str] = None
     data_path: Optional[str] = None
@@ -105,6 +106,10 @@ class _Batch(_Serializable):
         # self.size = len(self.data[0])
         self._update_data_hash()
         return data
+
+    def num_rows(self) -> int:
+        """Returns the number of rows in the batch."""
+        return sum(len(d) for d in self.data)
 
     def _update_data_hash(self) -> None:
         """Updates the hash of the data of the batch."""

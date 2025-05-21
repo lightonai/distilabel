@@ -1,6 +1,7 @@
 import random
 from pathlib import Path as pth 
 import json
+from copy import deepcopy
 
 from distilabel.pydantics import CategoricalDist, PromptSamplerConfig
 
@@ -34,7 +35,7 @@ class PromptSampler:
 
     def sample(self):
         '''Sample a prompt according to the prompt sampler config'''
-        dists = self.cfg.distributions
+        dists = deepcopy(self.cfg.distributions)
         if self.cfg.samples_per_prompt_kwarg:
             assert dists[self.cfg.samples_per_prompt_kwarg].samples_per_prompt is not None, (
                 "samples_per_prompt_kwarg must have a defined samples_per_prompt"

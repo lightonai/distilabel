@@ -13,7 +13,9 @@
 # limitations under the License.
 
 import traceback
+import time
 from queue import Queue
+from multiprocessing.synchronize import Lock
 from typing import Any, Dict, List, Optional, Union, cast
 
 from distilabel.constants import LAST_BATCH_SENT_FLAG
@@ -35,6 +37,7 @@ class _StepWrapper:
         output_queue: The queue to send the output data.
         load_queue: The queue used to notify the main process that the step has been loaded,
             has been unloaded or has failed to load.
+        is_route_step: Whether the step is a route step.
     """
 
     def __init__(
@@ -46,6 +49,7 @@ class _StepWrapper:
         load_queue: "Queue[Union[StepLoadStatus, None]]",
         dry_run: bool = False,
         ray_pipeline: bool = False,
+        is_route_step: bool = False,
     ) -> None:
         """Initializes the `_ProcessWrapper`.
 
@@ -57,6 +61,7 @@ class _StepWrapper:
                 loaded, has been unloaded or has failed to load.
             dry_run: Flag to ensure we are forcing to run the last batch.
             ray_pipeline: Whether the step is running a `RayPipeline` or not.
+            is_route_step: Whether the step is a route step.
         """
         self.step = step
         self.replica = replica
@@ -65,8 +70,11 @@ class _StepWrapper:
         self.load_queue = load_queue
         self.dry_run = dry_run
         self.ray_pipeline = ray_pipeline
-
+        self.is_route_step = is_route_step
         self._init_cuda_device_placement()
+
+        self._received_batches = []
+        self._sent_batches = []
 
     def _init_cuda_device_placement(self) -> None:
         """Sets the LLM identifier and the number of desired GPUs of the `CudaDevicePlacementMixin`"""
@@ -168,12 +176,12 @@ class _StepWrapper:
         step = cast("GeneratorStep", self.step)
 
         try:
-            if (batch := self.input_queue.get()) is None:
+            batch = self.input_queue.get()
+            if batch is None:
                 self.step._logger.info(
                     f"🛑 Stopping yielding batches from step '{self.step.name}'"
                 )
                 return
-
             offset = batch.seq_no * step.batch_size  # type: ignore
 
             self.step._logger.info(
@@ -192,7 +200,8 @@ class _StepWrapper:
                 self.step._logger.debug(
                     f"Step '{self.step.name}' waiting for next batch request..."
                 )
-                if (batch := self.input_queue.get()) is None:
+                batch = self.input_queue.get()
+                if batch is None:
                     self.step._logger.info(
                         f"🛑 Stopping yielding batches from step '{self.step.name}'"
                     )
@@ -202,26 +211,49 @@ class _StepWrapper:
 
     def _non_generator_process_loop(self) -> None:
         """Runs the process loop for a non-generator step. It will call the `process`
-        method of the step and send the output data to the `output_queue` and block until
-        the next batch is received from the `input_queue`. If the `last_batch` attribute
-        of the batch is `True`, the loop will stop and the process will finish.
-
-        If an error occurs during the execution of the `process` method and the step is
-        global, the process will raise a `_StepWrapperException`. If the step is not
-        global, the process will log the error and send an empty batch to the `output_queue`.
-
-        Raises:
-            _StepWrapperException: If an error occurs during the execution of the
-                `process` method and the step is global.
+        method of the step for each batch received from the input queue.
         """
         step = cast("Step", self.step)
+        step._logger.info(f"✨ Starting process loop for step '{step.name}'...")
+
         while True:
-            if (batch := self.input_queue.get()) is None:
+            if self.is_route_step:
+                while True:
+                    # For route steps, we want to ensure that we have at least two items
+                    # or the LAST_BATCH_SENT_FLAG before processing a batch. This is to
+                    # ensure that we can determine if the current batch is the actual
+                    # last batch for this specific route, as the main `last_batch` flag
+                    # from the predecessor might go to a different route.
+                    q_contents = self.input_queue.items()
+                    if (
+                        len([b for b in q_contents if b not in [LAST_BATCH_SENT_FLAG, None]]) > 1
+                        or LAST_BATCH_SENT_FLAG in q_contents
+                    ):
+                        break
+                    time.sleep(5) # Wait if conditions not met
+
+            batch = self.input_queue.get() # This is a blocking call
+
+            if batch is None:
                 self.step._logger.info(
                     f"🛑 Stopping processing batches from step '{self.step.name}' (replica"
                     f" ID: {self.replica})"
                 )
                 break
+
+            # Since only one of the route steps will receive a batch with last_batch = True, if this step is a route step, 
+            # it likely won't receive a batch with last_batch = True and needs to create this
+            # itself once it knows which batch is actually the last one for it.
+            # Re-inspect the queue after getting the current batch.
+            # The `q_contents` from before the `get()` might be stale.
+            q_contents = self.input_queue.items() # type: ignore
+            if (
+                self.is_route_step
+                and batch != LAST_BATCH_SENT_FLAG
+                and len(q_contents) >= 0 # Simpler check: if anything (even just flags) is left or not
+                and all(b in [LAST_BATCH_SENT_FLAG, None] for b in q_contents)
+            ):
+                batch.route_step_last_batch = True # type: ignore
 
             if batch == LAST_BATCH_SENT_FLAG:
                 self.step._logger.debug("Received `LAST_BATCH_SENT_FLAG`. Stopping...")
@@ -267,11 +299,19 @@ class _StepWrapper:
                     f"Subprocess traceback:\n\n{traceback.format_exc()}"
                 )
             finally:
+                from copy import deepcopy
+                self._received_batches.append(deepcopy(batch))
+                self._sent_batches.append(deepcopy(result))
                 batch.set_data([result])
                 self._send_batch(batch)
 
-            if batch.last_batch:
+            if batch.last_batch or batch.route_step_last_batch:
                 break
+        
+        # debug = True
+        # while debug and 'answer' in self.step.name:
+        #     time.sleep(1)
+        #     pass
 
     def _impute_step_outputs(self, batch: "_Batch") -> List[Dict[str, Any]]:
         """Imputes the step outputs columns with `None` in the batch data.
