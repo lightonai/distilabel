@@ -1315,9 +1315,15 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
         self._notify_steps_to_stop()
 
         for step_name in self.dag:
+            t0 = time.time()
             while self._is_step_running(step_name):
                 self._logger.debug(f"Waiting for step '{step_name}' to finish...")
                 time.sleep(0.5)
+                if time.time() - t0 > 120:
+                    self._logger.error(
+                        f"Step '{step_name}' did not notify of unload while waiting for it to finish, skipping..."
+                    )
+                    break
 
         with self._stop_called_lock:
             if self._stop_called:

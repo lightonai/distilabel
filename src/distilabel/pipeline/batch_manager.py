@@ -566,7 +566,7 @@ class _BatchManagerStep(_Serializable):
             # `batches` are sorted by `seq_no`
             for batch in batches:
                 # Need to create batches using the data from batches with sequential `seq_no`
-                # The reason for this change is that when a batch is created out of part of a received batch (say 2)
+                # The reason for the change to <= <= is that when a batch is created out of part of a received batch (say 2)
                 # and there is some leftover, then the next expected seq no[0] will remain pointing at that batch (2)
                 # then this step, when it is a route step, will receive some non-sequential batch next (say 7),
                 # and the previous logic would check rows from 2 then look for a batch with seq_no 3 (cause it just +1'd)

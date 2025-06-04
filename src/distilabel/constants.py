@@ -48,7 +48,7 @@ PIPELINE_LOG_FILENAME: Final[str] = "pipeline.log"
 # Docs page for the custom errors
 DISTILABEL_DOCS_URL: Final[str] = "https://distilabel.argilla.io/latest/"
 
-OUTPUT_QUEUE_TIMEOUT: Final[int] = 1200
+OUTPUT_QUEUE_TIMEOUT: Final[int] = 2000
 LAST_BATCH_ROUTED_FLAG: Final[str] = "last_batch_routed"
 STRUCTURED_OUTPUT_RETRIES = 2
 

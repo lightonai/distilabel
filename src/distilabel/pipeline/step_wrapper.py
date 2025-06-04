@@ -119,10 +119,15 @@ class _StepWrapper:
 
         self._notify_load()
 
-        if self.step.is_generator:
-            self._generator_step_process_loop()
-        else:
-            self._non_generator_process_loop()
+        try:
+            if self.step.is_generator:
+                self._generator_step_process_loop()
+            else:
+                self._non_generator_process_loop()
+        except Exception as e:
+            self.step.unload()
+            self._notify_unload()
+            raise _StepWrapperException(str(e), self.step, 2, e) from e
 
         # Just in case `None` sentinel was sent
         # try:
