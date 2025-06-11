@@ -802,6 +802,7 @@ class _BatchManager(_Serializable):
         self._last_batch_sent = last_batch_sent
         self._last_batch_flag_sent_to = last_batch_flag_sent_to
         self._received_batch_seq_nos = received_batch_seq_nos
+        self._route_steps_receiving_no_batches = set()
 
     def _missing_seq_no(self, last_batch: _Batch) -> bool:
         """Checks if there's any missing sequence number in the batches received from the
@@ -831,6 +832,7 @@ class _BatchManager(_Serializable):
                 # a route step that received a last batch flag
                 # (not all route steps will send a last batch to be added to _last_batch_received)
                 step_name in self._last_batch_flag_sent_to
+                or step_name in self._route_steps_receiving_no_batches
             ):
                 continue
 
@@ -1024,6 +1026,10 @@ class _BatchManager(_Serializable):
         which route steps to expect batches from."""
         self._steps[conv_step].convergence_step_receives_from[route_step] = True
 
+    def update_not_routed(self, route_step: str) -> None:
+        """Update the set of route steps that are not routed to the convergence step."""
+        self._route_steps_receiving_no_batches.add(route_step)
+
     def convergence_step_receives_from(self, conv_step: str) -> List[str]:
         """Get the route steps that the convergence step receives batches from."""
         return [
@@ -1169,215 +1175,3 @@ class _BatchManager(_Serializable):
             "last_batch_flag_sent_to": self._last_batch_flag_sent_to,
             "received_batch_seq_nos": self._received_batch_seq_nos,
         }
-
-    def cache(self, path: Path, steps_data_path: Path) -> None:  # noqa: C901
-        """Cache the `_BatchManager` to a file.
-
-        Args:
-            path: The path to the file where the `_BatchManager` will be cached. If `None`,
-                then the `_BatchManager` will be cached in the default cache folder.
-            steps_data_path: The path where the outputs of each `Step` (considering its
-                signature) will be saved for later reuse in another pipelines executions.
-        """
-
-        def save_batch(
-            batches_dir: Path, batch_dump: Dict[str, Any], batch_list: List[_Batch]
-        ) -> Path:
-            seq_no = batch_dump["seq_no"]
-            data_hash = batch_dump["data_hash"]
-            batch_file = batches_dir / f"batch_{seq_no}_{data_hash}.json"
-
-            # Save the batch if it doesn't exist
-            if not batch_file.exists():
-                # Get the data of the batch before saving it
-                batch = next(batch for batch in batch_list if batch.seq_no == seq_no)
-                batch_dump["data"] = batch.data
-                self.save(path=batch_file, format="json", dump=batch_dump)
-
-            return batch_file
-
-        def remove_files(keep_files: List[str], dir: Path) -> None:
-            files = list_files_in_dir(dir, key=None)
-            remove = set(files) - {Path(file) for file in keep_files}
-            for file in remove:
-                file.unlink()
-
-        path = Path(path)
-
-        # Do not include `_Batch` data so `dump` is fast
-        dump = self.dump(include_batch_data=False)
-        batch_manager_step_files = {}
-
-        # Do this to avoid modifying the dictionary while iterating over it
-        batch_manager_steps = set(dump["steps"].keys())
-        for step_name in batch_manager_steps:
-            step_dump = dump["steps"].pop(step_name)
-
-            # Create a directory for each batch manager step to store their batches
-            batch_manager_step_dir = path.parent / "batch_manager_steps" / step_name
-            batch_manager_step_dir.mkdir(parents=True, exist_ok=True)
-
-            # Store each built `_Batch` in a separate file
-            built_batches_dir = batch_manager_step_dir / "built_batches"
-            built_batches_dir.mkdir(parents=True, exist_ok=True)
-            step_dump["built_batches"] = [
-                str(
-                    save_batch(
-                        batches_dir=built_batches_dir,
-                        batch_dump=batch_dump,
-                        batch_list=self._steps[step_name].built_batches,
-                    )
-                )
-                for batch_dump in step_dump["built_batches"]
-            ]
-            # Remove built `_Batch`es that were consumed from cache
-            remove_files(step_dump["built_batches"], built_batches_dir)
-
-            # Store the `_BatchManagerStep` info
-            batch_manager_step_file = str(
-                path.parent / f"batch_manager_steps/{step_name}/batch_manager_step.json"
-            )
-            self.save(path=batch_manager_step_file, format="json", dump=step_dump)
-
-            # Store the path to the `_BatchManagerStep` file
-            batch_manager_step_files[step_name] = batch_manager_step_file
-
-        dump["steps"] = batch_manager_step_files
-        self.save(path=path, format="json", dump=dump)
-
-    @classmethod
-    def load_from_cache(
-        cls, dag: "DAG", batch_manager_path: "StrOrPath", steps_data_path: "StrOrPath"
-    ) -> "_BatchManager":
-        """Loads the `_BatchManager` from a cache file.
-
-        Args:
-            path: The path to the cache file.
-        """
-        _check_is_dir(batch_manager_path)
-        content = read_json(batch_manager_path)
-
-        # Read each `_BatchManagerStep` from file
-        steps = {}
-        for step_name, step_file in content["steps"].items():
-            steps[step_name] = read_json(step_file)
-
-            # When reading back from JSON, `next_expected_seq_no` and `step_offset` is a
-            # list (because JSON files do not have tuples).
-            steps[step_name]["next_expected_seq_no"] = {
-                k: tuple(v) for k, v in steps[step_name]["next_expected_seq_no"].items()
-            }
-            steps[step_name]["step_offset"] = {
-                k: tuple(v) for k, v in steps[step_name]["step_offset"].items()
-            }
-
-            # TODO: where are we writing built batches now? xD
-            # Read each `_Batch` from file
-            steps[step_name]["built_batches"] = [
-                read_json(batch) for batch in steps[step_name]["built_batches"]
-            ]
-
-            # Read the batches from the `steps_data` directory to populate back the `_BatchManagerStep`
-            step_offset = steps[step_name]["step_offset"]
-            for successor_step_name, offset in step_offset.items():
-                batch_offset, batch_row_offset = offset
-                step: "_Step" = dag.get_step(successor_step_name)[STEP_ATTR_NAME]
-                successor_step_data_path = (
-                    steps_data_path / f"{step.name}_{step.signature}"
-                )
-
-                # read batches from successor step from the step data directory taking into
-                # account offset
-                batches = []
-                for batch_file in successor_step_data_path.glob("*.json"):
-                    if not batch_file.is_file() or batch_file.suffix != ".json":
-                        continue
-
-                    # If the batch number is lower than the batch offset then we should
-                    # skip it as it has already been processed by the step
-                    batch_no = int(batch_file.stem.split("batch_")[1])
-                    if batch_no < batch_offset:
-                        continue
-
-                    # read the batch and skip the first N rows of the first batch
-                    batch = read_json(batch_file)
-                    if batch_no == batch_offset:
-                        batch["data"][0] = batch["data"][0][batch_row_offset:]
-
-                    batches.append(batch)
-
-                # sort batches by `seq_no` as it's a requirement for checking if ready to
-                # create next batch
-                batches.sort(key=lambda batch: batch["seq_no"])
-                steps[step_name]["data"][successor_step_name] = batches
-
-        content["steps"] = steps
-        return cls.from_dict(content)
-
-    def invalidate_cache_for(
-        self, step_name: str, dag: "DAG", steps_data_path: Path
-    ) -> None:
-        """Invalidates the cache for the given step and its predecessors.
-
-        Args:
-            step_name: the name of the step for which the cache will be invalidated.
-            dag: the `DAG` of the pipeline containing the steps.
-            steps_data_path: the path where the output batches of each `Step` were saved
-                for reuse in another pipeline execution.
-        """
-        invalidate_if_predecessor = []
-        for sorted_step in dag:
-            if (sorted_step == step_name) or any(
-                predecessor in invalidate_if_predecessor
-                for predecessor in dag.get_step_predecessors(sorted_step)
-            ):
-                self._reset_batch_manager_for_step(sorted_step, dag)
-                invalidate_if_predecessor.append(sorted_step)
-
-        self._load_predecessor_batches(step_name, dag, steps_data_path)
-
-    def _reset_batch_manager_for_step(self, step_name: str, dag: "DAG") -> None:
-        """Resets the batch manager state for a given step i.e. creates a new clean `_BatchManagerStep`
-        for the step and removes the step name from the lists of states of the `BatchManager`.
-
-        Args:
-            step_name: the name of step for which its batch manager state needs to be cleaned.
-            dag: the `DAG` of the pipeline containing the steps.
-        """
-        predecessors = list(dag.get_step_predecessors(step_name))
-        convergence_step = dag.is_convergence_step(step_name)
-        step = dag.get_step(step_name)[STEP_ATTR_NAME]
-        self._steps[step_name] = _BatchManagerStep.from_step(
-            step, predecessors=predecessors, convergence_step=convergence_step
-        )
-
-        self._last_batch_received[step_name] = None
-        self._last_batch_sent[step_name] = None
-        if step_name in self._last_batch_flag_sent_to:
-            self._last_batch_flag_sent_to.remove(step_name)
-
-    def _load_predecessor_batches(
-        self, step_name: str, dag: "DAG", steps_data_path: Path
-    ) -> None:
-        """Loads the cached batches of the predecessors of the step in its `_BatchManagerStep`.
-
-        Args:
-            step_name: the name of the step whose predecessors' batches will be loaded.
-            dag: the `DAG` of the pipeline containing the steps.
-            steps_data_path: the path where the output batches of each `Step` were saved
-                for reuse in another pipeline execution.
-        """
-        for predecessor in dag.get_step_predecessors(step_name):
-            step_predecessor = dag.get_step(predecessor)[STEP_ATTR_NAME]
-            predecessor_step_data_path = (
-                steps_data_path
-                / f"{step_predecessor.name}_{step_predecessor.signature}"
-            )
-            batch_files = list_files_in_dir(
-                predecessor_step_data_path, key=lambda x: int(x.stem.split("_")[-1])
-            )
-            for file in batch_files:
-                batch = _Batch.from_file(file)
-                if batch.last_batch:
-                    self._steps[step_name].last_batch_received.append(batch.step_name)
-                self._steps[step_name].data[predecessor].append(batch)

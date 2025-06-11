@@ -181,10 +181,19 @@ To directly contribute with `distilabel`, check our [good first issues](https://
 - It will launch a vllm server if the model name is not a recognized proprietary model.
 - Stages in the config and load stages in distilabel are different concepts. Stages in the config are broken into maybe multiple load stages/groups in distilabel so that I can handle scheduling arbitrary amounts of models into different load stages in the pipeline.
 - I added a timeout to the output batch loop (set in `constants.py`), if it doesn't receive an output batch within that timeframe, it will break and finalize the pipeline execution. Hanging issues are easy to run into so this just closes it in a controlled manner.
-- Convergence steps (those that come after steps that are routed to (route steps)) will act like global steps. This is due to issues with properly maintaining order of batches.
+- Convergence steps (those that come after steps that are routed to (route steps)) will act like global steps (waiting for all batches to be received before continuing). This is due to issues with properly maintaining order of batches.
 - I don't believe order of branches in `def process(self, *inputs: StepInput) -> "StepOutput":` is guaranteed. 
 - Don't connect a global step to a routing batch function, a global step must take and output all current rows, so that will all get routed together. Connect it to a `NoOp` to break it up.
 - **Important** I can't make guarantees about the caching system at the moment. Your batches are technically being saved in jsons as they go, so the data exists, but distilabel might not resume the pipeline without hanging.
+- I have implemented a batch level caching system.
+  - The cache key is dependent on only the data in the batch (order included) and the name of the class of step it is being sent to. 
+  - This works pretty well but is sensitive to the elements in the batch, which is influenced by batch size 
+    - Different batch sizes are different batches, none of them will be loaded from cache. This is how it should be in a sense, because a step receives a batch and may respond differently depending on the content of the whole batch 
+    - Or even the offset of data given to that batch: say you have 100 rows at some point in your pipeline, if a batches were cached for rows 33-38, 38-43, ..., then you repeat and somehow end up with a batch with 32-37, 37-42, none of the following batches will be retrieved from cache. This could happen if, e.g., you generated a different number of rows from some step every time the pipeline was run.
+    - You might successfully reduce the risk of this by setting batch size high enough that, e.g. there is only one batch, in which case, you are basically caching steps instead of batches. Untested and I would expect a drop in vLLM throughput.
+    - If you change a step's code or a routing batch function's code, caching can't detect this, but you can pass `invalidate_cache=True` to them to tell them to redo things. You can also pass `invalidate_distiset=True` to the pipeline to not used the distiset which is cached on completion of a pipeline.
+    - Caching at the step level is turned off by default except for LMGenerationTask (to save disk space for cheap, deterministic steps). Just set `use_cache=True` when creating anything inheriting from `_Step` to turn it on.
+    - As a backup to the sensitivity, there is LLM level caching also, so that LLM responses are not recomputed. The downside is this won't stop the step from being loaded (i.e. the vllm server startup) when all the LLM responses are cached. This is also sensitive to any randomness such as prompt sampling in your pipeline, so be aware of that.
 
 ## Notes on Distilabel (Issues and Helpful Knowledge)
 - **Short Version**: distilabel is very particular about how things are done, so there's a reason why every line is the way it is and I recommend starting off of one of the existing pipelines. Also, reading my code for e.g. the single page pipeline will tell you how to build on top of distilabel. Use the rest of this list as an issue tracker so people know how to solve issues in the future.
@@ -219,6 +228,8 @@ To directly contribute with `distilabel`, check our [good first issues](https://
 - If the vLLM server fails to start, the error will be something like: 'cannot pickle thread'. Check the `vllm_logs/` for the appropriate rank.
 - You can run into a deadlock if steps you're trying to route to are split across stages and no batch is sent to a certain stage. e.g. step_0 routes to [step_1, step_2] which route to step_3, load stages are like so [[step_0, step_1], [step_2], [step_3]]. If no batches are sent to step_2, the stage won't load and run properly. Edit: I have patched this.
 - Route steps need to be 1-1 mappings (no dropping or adding rows to batches). Edit: I patched this, it should work.
+- You should still drop None after any LMGenerationTask step because there are other ways than sturctured generation to end up with a None in the response.
+- Say you generate multiple responses to some list of images, then split and later rejoin the images. If a response was a list with duplicates, then when split, the rows will be exact copies of each other and will trigger the warning in join parallel branches. Solution: use a smarter model.
 
 ## Citation
 

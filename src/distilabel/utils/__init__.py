@@ -48,6 +48,9 @@ from .misc import (
     replace_source_col,
     randomize_source_order,
     read_queue,
+    save_jsonl,
+    load_jsonl,
+    hash_structure_with_images,
 )
 
 __all__ = [
@@ -84,4 +87,7 @@ __all__ = [
     "replace_source_col",
     "randomize_source_order",
     "read_queue",
+    "save_jsonl",
+    "load_jsonl",
+    "hash_structure_with_images",
 ]

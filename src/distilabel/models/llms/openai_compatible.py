@@ -1,8 +1,12 @@
 import os
+import hashlib
+import json
+from pathlib import Path
 from typing import Any, Callable, cast
 from pydantic import ValidationError, Field, PrivateAttr
 
 import openai
+import logging
 from tenacity import (
     retry,
     stop_after_attempt,
@@ -24,14 +28,29 @@ class VLM:
     prompt_sampler: PromptSampler | None = None
     debug_with_running_vllm: bool = Field(default=False, exclude=True)
 
+    _vlm_logger = logging.getLogger(f"distilabel.vlm")
+
     def _format_input(self, input: dict, lm_input_cols: list[str], lm_input_col_prefixes: list[str]) -> 'ChatType':
         '''
         takes raw dictionary row from dataset and samples a system prompt + formats in messages
 
         Also takes extra columns to include in the messages, 
         postfixed in order and prefixed with the lm_input_col_prefixes
+            e.g. a prefix can say: 'answer: ' before the answer col to indicate to the 
+            lm what the col is
         '''
         messages = [{'role': 'system', 'content': self.prompt_sampler.generate_prompt()}]
+        # inplace update the input to sneak it into the format_output of LMGenerationTask
+        input |= {'system': messages[0]['content']}
+
+        if not all(input.get(col) is not None for col in lm_input_cols + ['source']):
+            # some assurance that the values we want to use exist in input
+            # generation will be skipped in LMGenerationTask for this kind of input
+            self._vlm_logger.warning(
+                f"Skipping generation because some required columns are missing from {lm_input_cols + ['source']}\n"
+                f"Input: {input}"
+            )
+            return [{'role': 'system', 'content': ''}]
         
         # Handle source content
         messages.append(utils.source_to_msg(input['source'], self.stage.max_dims, self.msg_content_img))
@@ -47,8 +66,6 @@ class VLM:
                 messages.append({'role': 'user', 'content': prefix})
             messages.append(message)
         
-        # inplace update the input to sneak it into the format_output of LMGenerationTask
-        input |= {'system': messages[0]['content']}
         return messages
 
     def load(self):
@@ -57,6 +74,100 @@ class VLM:
     def msg_content_img(self, b64_img):
         """Convert base64 image to appropriate format. To be implemented by subclasses."""
         raise NotImplementedError("Subclasses must implement msg_content_img")
+
+def lm_cache(agenerate: Callable) -> Callable:
+    '''
+    Decorator for agenerate methods to handle caching of input -> output.
+    
+    Maps all input parameters to a GenerateOutput object using a hash-based cache.
+    The cache is stored in self.pipeline._cache_location['lm_cache'] as JSON files.
+    
+    Behavior:
+    - Does not read/write cache if self.use_cache is False
+    - Overwrites cache (without reading) if self.invalidate_cache is True
+    - Creates cache directory if it doesn't exist
+    - Uses JSON for safe serialization of GenerateOutput objects
+    
+    This decorator should be applied before other decorators that modify the function signature.
+    
+    Returns:
+        GenerateOutput: The cached or newly generated output containing generations,
+                       statistics, and optional logprobs.
+    '''
+    async def agenerate_cached(
+        self,
+        input: FormattedInput,
+        num_generations: int = 1,
+        max_new_tokens: int = 128,
+        temperature: float = 1.0,
+        extra_body: dict[str, Any] | None = None,
+    ) -> GenerateOutput:
+        self = cast(OpenAILM, self)
+        # Skip caching if use_cache is False
+        if not getattr(self, 'use_cache', True):
+            return await agenerate(
+                self,
+                input=input,
+                num_generations=num_generations,
+                max_new_tokens=max_new_tokens,
+                temperature=temperature,
+                extra_body=extra_body,
+            )
+        
+        # Create cache key from all parameters
+        cache_params = {
+            'input': input,
+            'num_generations': num_generations,
+            'max_new_tokens': max_new_tokens,
+            'temperature': temperature,
+            'extra_body': extra_body,
+            'model_name': getattr(self, 'model_name', 'unknown'),
+        }
+        
+        # Get cache directory
+        cache_dir = self.lm_config.lm_response_cache_root
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        
+        cache_key = cache_dir / f"{utils.hash_structure_with_images(cache_params)}.json"
+        
+        # Check if we should read from cache
+        should_read_cache = (
+            not getattr(self, 'invalidate_cache', False) and 
+            cache_key.exists()
+        )
+        
+        if should_read_cache:
+            try:
+                cached_response = utils.load_json(cache_key)
+                self._logger.info(f"🔍 Cache hit for LM {self.lm_config.path}")
+                return cached_response
+            except Exception as e:
+                # If cache read fails, proceed with generation
+                # Log the error but don't fail the entire operation
+                if hasattr(self, '_logger'):
+                    self._logger.warning(f"Failed to read cache file {cache_key}: {e}")
+        
+        # Generate new result
+        result = await agenerate(
+            self,
+            input=input,
+            num_generations=num_generations,
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
+            extra_body=extra_body,
+        )
+        
+        # Save to cache
+        try:
+            utils.save_json(cache_key, result)
+        except Exception as e:
+            # If cache write fails, just log the error but don't fail the operation
+            if hasattr(self, '_logger'):
+                self._logger.warning(f"Failed to write cache file {cache_key}: {e}")
+        
+        return result
+    
+    return agenerate_cached
 
 def multiple_generations(agenerate: Callable) -> Callable:
     '''
@@ -96,6 +207,8 @@ def structured_output(agenerate: Callable) -> Callable:
     '''
     Decorator for agenerate methods to handle retries and structured output 
     according to the pydantic schema in self.lm_config.out_model
+
+    Must come before multiple_generations because it expects only a single generation
     '''
     async def agenerate_structured(
         self,
@@ -151,6 +264,8 @@ class OpenAILM(OpenAILLM, CudaDevicePlacementMixin, VLM):
     Anthropic is supported with 'claude' in the model path
     '''
     use_vllm: bool = False
+    use_cache: bool = True
+    invalidate_cache: bool = False
     _vllm_api: vLLMAPI = PrivateAttr(None)
 
     def load(self):
@@ -197,6 +312,7 @@ class OpenAILM(OpenAILLM, CudaDevicePlacementMixin, VLM):
     def msg_content_img(self, b64_img):
         return utils.msg_content_img_url(b64_img)
 
+    @lm_cache
     @multiple_generations
     @structured_output
     async def agenerate(
@@ -213,6 +329,14 @@ class OpenAILM(OpenAILLM, CudaDevicePlacementMixin, VLM):
         
         These include frequency_penalty, presence_penalty, stop, response_format, maybe others
         '''
+        no_response = GenerateOutput(
+            generations=[None],
+            statistics={'input_tokens': [0], 'output_tokens': [0]},
+        )
+        # in case previous steps somehow gave empty inputs
+        if len(input) == 0 or len(input) == 1 and input[0]['content'] in [None, '']:  # nothing for lm to respond to
+            return no_response
+        
         @retry(wait=wait_random_exponential(min=1, max=60), stop=stop_after_attempt(5), reraise=True, retry_error_callback=openai.RateLimitError)
         async def _generate():
             completion = await self._aclient.chat.completions.create(
@@ -224,12 +348,12 @@ class OpenAILM(OpenAILLM, CudaDevicePlacementMixin, VLM):
             )
             return completion
         
-        completion = await _generate()
+        try:
+            completion = await _generate()
+        except Exception as e:
+            completion = None
         if completion is None:
-            return GenerateOutput(
-                generations=[None],
-                statistics={'input_tokens': [0], 'output_tokens': [0]},
-            )
+            return no_response
         return self._generations_from_openai_completion(completion)
 
     # also cleanup vLLM

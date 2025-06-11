@@ -1,4 +1,7 @@
 import os
+from PIL import Image
+import io
+import hashlib
 import json
 from pdf2image import pdfinfo_from_path
 from pathlib import Path as pth
@@ -44,8 +47,19 @@ def load_json(path):
         return json.load(f)
 
 def save_json(path, data):
+    path = pth(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, 'w') as f:
-        json.dump(data, f)
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+def save_jsonl(path, data, append=True):
+    with open(path, 'a' if append else 'w') as f:
+        for line in data:
+            f.write(json.dumps(line) + '\n')
+
+def load_jsonl(path):
+    with open(path, 'r') as f:
+        return [json.loads(line) for line in f]
 
 def pdf_name(page):
     '''Return the pdf name from a page filename'''
@@ -148,8 +162,105 @@ def replace_source_col(distiset: Dataset, dataset: list[dict]):
     to retain the original order
     '''
     map_to_source = {frozenset(row['source']): row['source'] for row in dataset}
-    distiset = distiset.map(lambda x: {'source': map_to_source[frozenset(x['source'])]}, num_proc=64)
+    distiset = distiset.map(lambda x: {'source': map_to_source.get(frozenset(x['source']))}, num_proc=1)
+    distiset = distiset.filter(lambda x: x['source'] is not None)
     return distiset
+
+def hash_structure_with_images(obj: Any) -> str:
+    """Deterministic hash of a recursive structure.
+
+    Creates a stable hash for any structure containing dictionaries, lists, strings,
+    and PIL Images. Returns a hex digest that will be consistent across different runs.
+
+    Parameters
+    ----------
+    obj:
+        The object to hash. Can contain nested dictionaries, lists, and PIL Images.
+
+    Returns
+    -------
+        A SHA-256 hex digest that uniquely identifies the content of the object.
+
+    Examples
+    --------
+    >>> from PIL import Image
+    >>> import numpy as np
+
+    >>> # Create two different red images
+    >>> red_img1 = Image.new('RGB', (100, 100), color='red')
+    >>> red_img2 = Image.new('RGB', (100, 100), color='red')
+
+    >>> # Create a blue image
+    >>> blue_img = Image.new('RGB', (100, 100), color='blue')
+
+    >>> # Test 1: Same structure with same content should have same hash
+    >>> test_dict1 = {"text": "hello", "image": red_img1}
+    >>> test_dict2 = {"text": "hello", "image": red_img2}
+    >>> hash1 = hash_structure_with_images(test_dict1)
+    >>> hash2 = hash_structure_with_images(test_dict2)
+    >>> hash1 == hash2
+    True
+
+    >>> # Test 2: Different content should have different hashes
+    >>> test_dict3 = {"text": "hello", "image": blue_img}
+    >>> hash3 = hash_structure_with_images(test_dict3)
+    >>> hash1 == hash3
+    False
+
+    >>> # Test 3: Order of keys shouldn't matter
+    >>> test_dict4 = {"image": red_img1, "text": "hello"}
+    >>> hash4 = hash_structure_with_images(test_dict4)
+    >>> hash1 == hash4
+    True
+
+    >>> # Test 4: Nested structures
+    >>> nested1 = {"outer": {"inner": [1, 2, red_img1]}}
+    >>> nested2 = {"outer": {"inner": [1, 2, red_img2]}}
+    >>> nested3 = {"outer": {"inner": [1, 2, blue_img]}}
+    >>> hash_nested1 = hash_structure_with_images(nested1)
+    >>> hash_nested2 = hash_structure_with_images(nested2)
+    >>> hash_nested3 = hash_structure_with_images(nested3)
+    >>> hash_nested1 == hash_nested2  # Same structure, same images
+    True
+    >>> hash_nested1 == hash_nested3  # Same structure, different images
+    False
+
+    """
+
+    # Helper function to process the structure recursively
+    def process_obj(item: str | dict | list) -> str | dict | list:
+        """Make the structure hashable recursively."""
+        if isinstance(item, dict):
+            # Sort the keys and recursively process each value
+            processed_dict = {}
+            for key in sorted(item.keys()):  # Sort keys for consistent ordering
+                processed_dict[str(key)] = process_obj(item[key])
+            return processed_dict
+
+        if isinstance(item, list):
+            # Recursively process each item in the list
+            return [process_obj(i) for i in item]
+
+        if isinstance(item, Image.Image):
+            # Convert PIL Image to bytes for consistent hashing
+            img_bytes = io.BytesIO()
+            item.save(img_bytes, format="PNG")
+            # Return a special identifier for images
+            return f"IMAGE:{hashlib.md5(img_bytes.getvalue()).hexdigest()}"  # noqa: S324
+
+        if isinstance(item, (str, int, float, bool)) or item is None:
+            # Basic types can be returned as is
+            return item
+
+        # For any other type, convert to string
+        return str(item)
+
+    # Process the structure
+    processed = process_obj(obj)
+
+    # Convert to JSON string and hash
+    serialized = json.dumps(processed, sort_keys=True)
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
 # define this as a function to make it pickleable
 def generation_is_structured(row: dict, cols: list[str]) -> bool:
@@ -173,16 +284,16 @@ def is_openai_model_name(model_name: str) -> bool:
     """
     return bool(re.search(r'(gpt|o\d.*)', model_name, re.IGNORECASE))
 
-def source_to_msg(source: str | list[str], max_dims: tuple[int, int], msg_content_img: Callable) -> dict:
+def source_to_msg(source: str | list[str] | None, max_dims: tuple[int, int], msg_content_img: Callable) -> dict:
     '''
     Convert a source into an openai message.
     
     A source is a string directly for input, or a list of paths to images or pdf pages.
     '''
     if isinstance(source, str):
-            # Text source
+        # Text source
         return {'role': 'user', 'content': source}
-    else:
+    elif isinstance(source, list):
         # Image source (list of paths)
         content = []
         for path in source:
@@ -192,9 +303,13 @@ def source_to_msg(source: str | list[str], max_dims: tuple[int, int], msg_conten
             content.append(msg_content_img(b64_img))
             
         return {'role': 'user', 'content': content}
+    else:
+        return {'role': 'user', 'content': None}
 
-def clean_structured_output(output: str) -> str:
+def clean_structured_output(output: str | None) -> str | None:
     '''Remove some common and basic formatting errors.'''
+    if output is None:
+        return None
     output = output.replace('```json', '').replace('```', '')
     return output
 

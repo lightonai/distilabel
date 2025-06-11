@@ -14,20 +14,22 @@
 
 import copy
 import hashlib
-from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import fsspec
 import pyarrow as pa
 import pyarrow.parquet as pq
 from upath import UPath
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
+from distilabel.utils import save_json, load_json
+from distilabel.mixins.signature import SignatureMixin
 from distilabel.utils.serialization import _Serializable
 
 
-@dataclass
-class _Batch(_Serializable):
-    """Dataclass to represent a batch of data to be processed by a `_Step`.
+class _Batch(_Serializable, SignatureMixin):
+    """Pydantic model to represent a batch of data to be processed by a `_Step`.
 
     Attributes:
         seq_no: The sequence number of the batch.
@@ -49,14 +51,18 @@ class _Batch(_Serializable):
     step_name: str
     last_batch: bool
     route_step_last_batch: bool = False
-    data: List[List[Dict[str, Any]]] = field(default_factory=list, repr=False)
+    data: List[List[Dict[str, Any]]] = Field(default_factory=list, repr=False)
     data_hash: Optional[str] = None
     data_path: Optional[str] = None
     accumulated: bool = False
-    created_from: Dict[str, List[Tuple[int, int, int]]] = field(default_factory=dict)
-    batch_routed_to: List[str] = field(default_factory=list)
+    created_from: Dict[str, List[Tuple[int, int, int]]] = Field(default_factory=dict)
+    batch_routed_to: List[str] = Field(default_factory=list)
     size: int = 0
-    _fs: Optional[fsspec.AbstractFileSystem] = None
+    _fs: Optional[fsspec.AbstractFileSystem] = PrivateAttr(default=None)
+
+    def model_post_init(self, context) -> None:
+        # want the signature to only depend on data
+        self.exclude_from_signature.union(set(_Batch.model_fields.keys()) - {'data'})
 
     def next_batch(self) -> "_Batch":
         """Create a new `_Batch` instance with the next batch of data.
@@ -95,6 +101,9 @@ class _Batch(_Serializable):
 
         if self.data == [] and self.data_path is not None:
             pass
+
+        if self.num_rows() == 0:
+            return []
 
         if num_rows is None:
             data = self.data[0]
@@ -240,3 +249,27 @@ class _Batch(_Serializable):
                 self.data.append(table.to_pylist())
 
         self._fs.rm(self.data_path, recursive=True)
+
+    def routed_to_cached(self, cache_root: Path) -> bool:
+        """Check if the batch is cached in the given cache_root."""
+        return (cache_root / 'routed_to' / f'{self.signature}.json').exists()
+
+    def cache_routed_to(self, cache_root: Path) -> None:
+        """Cache the field batch_routed_to in the given cache_root."""
+        path = cache_root / 'routed_to' / f'{self.signature}.json'
+        save_json(path, self.batch_routed_to)
+
+    def load_routed_to(self, cache_root: Path) -> None:
+        """Load the field batch_routed_to from cache."""
+        path = cache_root / 'routed_to' / f'{self.signature}.json'
+        if self.routed_to_cached(cache_root):
+            self.batch_routed_to = load_json(path)
+
+    @classmethod
+    def cached(cls, path: Path) -> bool:
+        """Check if the batch is cached in the given path."""
+        return path.exists()
+
+    def cache(self, path: Path) -> None:
+        """Cache the batch in the given path."""
+        self.save(path, format="json")

@@ -337,6 +337,9 @@ class Pipeline(BasePipeline):
             dag=self.dag,
         )
 
+        if self.use_cache:
+            distiset.save_to_disk(self._cache_location["distiset"])
+
         stop_logging()
 
         return distiset
@@ -380,6 +383,7 @@ class Pipeline(BasePipeline):
             dry_run=self._dry_run,
             ray_pipeline=False,
             is_route_step=self.dag.is_route_step(step.name),
+            cache_location=self._cache_location["batches_cache"],
         )
 
         self._pool.apply_async(step_wrapper.run, error_callback=self._error_callback)

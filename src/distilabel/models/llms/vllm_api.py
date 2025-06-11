@@ -40,7 +40,7 @@ class vLLMAPI:
             if not self.port_in_use(port):
                 return port
 
-    def start_vllm(self, timeout=240):
+    def start_vllm(self, timeout=600):
         '''Start the asynchronous vLLM server.'''
         # ensure model is downloaded before launching vllm
         from huggingface_hub import snapshot_download

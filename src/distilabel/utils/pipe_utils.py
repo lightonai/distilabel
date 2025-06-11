@@ -33,13 +33,18 @@ def steps_to_load_groups(steps: list[Step], n_gpus: int) -> list[list[str]]:
     load_groups.append(load_group)
     return load_groups
 
-def data_router(step_distribution: list[float], k: int = 1) -> Callable:
+def data_router(step_distribution: list[float], k: int = 1, invalidate_cache: bool = False) -> Callable:
     '''
     Given a list of downstream steps and a distribution, per batch, sample k downstream steps to route to
 
     Use this as a step in a pipeline to e.g. split the data from a step to different language models
+
+    Args:
+        invalidate_cache: If true, reroute batches instead of using the cached routed_to.
+            This is needed if you update the routing function but still want to resume progress
+            where possible.
     '''
-    @routing_batch_function()
+    @routing_batch_function(invalidate_cache=invalidate_cache)
     def router(steps: list[str]) -> list[str]:
         return random.choices(steps, weights=step_distribution, k=k)
     return router
