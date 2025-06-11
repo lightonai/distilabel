@@ -16,6 +16,7 @@ question_prompt_sampler_config = PromptSamplerConfig(
     distributions={
         'n_questions': CategoricalDist(
             choices=[('1', 1), ('2', 1), ('3', 1), ('4', 1), ('5', 1)],
+            # choices=[('1', 2)]
         ),
     }
 )
@@ -28,6 +29,7 @@ stages = [
         lm_configs=[
             LMConfig(
                 path='gpt-4.1-mini', 
+                # path='Qwen/Qwen2-VL-7B-Instruct',
                 data_ratio=0.3,
                 temperature=0.1, 
                 task_name='question_generation',
@@ -38,6 +40,7 @@ stages = [
             ),
             LMConfig(
                 path='gemini-2.5-flash-preview-04-17',
+                # path='Qwen/Qwen2-VL-7B-Instruct',
                 data_ratio=0.4,
                 temperature=0.1,
                 task_name='question_generation',
@@ -48,6 +51,7 @@ stages = [
             ),
             LMConfig(
                 path='claude-3-5-haiku-latest', 
+                # path='Qwen/Qwen2-VL-7B-Instruct',
                 data_ratio=0.3,
                 temperature=0.1, 
                 task_name='question_generation',
@@ -68,6 +72,7 @@ stages = [
             # single page answer models
             LMConfig(
                 path='Qwen/Qwen2.5-VL-32B-Instruct',
+                # path='Qwen/Qwen2-VL-7B-Instruct',
                 data_ratio=1, 
                 task_name='single_page_answer',
                 temperature=0.2,
@@ -81,6 +86,7 @@ stages = [
             ),
             LMConfig(
                 path='OpenGVLab/InternVL3-38B', 
+                # path='Qwen/Qwen2-VL-7B-Instruct',
                 data_ratio=1, 
                 task_name='single_page_answer',
                 temperature=0.2,
@@ -94,6 +100,7 @@ stages = [
             ),
             LMConfig(
                 path='mistralai/Mistral-Small-3.1-24B-Instruct-2503', 
+                # path='Qwen/Qwen2-VL-7B-Instruct',
                 data_ratio=1, 
                 task_name='single_page_answer',
                 temperature=0.2,
@@ -115,6 +122,7 @@ stages = [
             # question requirements models
             LMConfig(
                 path='gpt-4.1-nano', 
+                # path='Qwen/Qwen2-VL-7B-Instruct',
                 data_ratio=1,
                 temperature=0.1, 
                 task_name='question_requirements',
@@ -126,6 +134,7 @@ stages = [
             ),
             LMConfig(
                 path='gemini-2.0-flash-lite',
+                # path='Qwen/Qwen2-VL-7B-Instruct',
                 data_ratio=1,
                 temperature=0.1,
                 task_name='question_requirements',
@@ -148,6 +157,7 @@ stages = [
             LMConfig(
                 # path='grok-3-mini-beta', 
                 path='gpt-4.1-mini',
+                # path='Qwen/Qwen2-VL-7B-Instruct',
                 data_ratio=1, 
                 task_name='answer_judge',
                 temperature=0.1,  # Low temperature for consistent judgments
@@ -158,6 +168,7 @@ stages = [
             ),
             LMConfig(
                 path='gemini-2.5-flash-preview-04-17',
+                # path='Qwen/Qwen2-VL-7B-Instruct',
                 data_ratio=1, 
                 task_name='answer_judge',
                 temperature=0.1,  # Low temperature for consistent judgments
@@ -168,6 +179,7 @@ stages = [
             ),
             LMConfig(
                 path='claude-3-5-haiku-latest',
+                # path='Qwen/Qwen2-VL-7B-Instruct',
                 data_ratio=1, 
                 task_name='answer_judge',
                 temperature=0.1,  # Low temperature for consistent judgments
@@ -187,6 +199,7 @@ stages = [
         lm_configs=[
             LMConfig(
                 path='Qwen/Qwen2.5-VL-72B-Instruct', 
+                # path='Qwen/Qwen2-VL-7B-Instruct',
                 data_ratio=0.12, 
                 task_name='answer_generation',
                 temperature=0.2,
@@ -199,6 +212,7 @@ stages = [
             ),
             LMConfig(
                 path='OpenGVLab/InternVL3-78B', 
+                # path='Qwen/Qwen2-VL-7B-Instruct',
                 data_ratio=0.12, 
                 task_name='answer_generation',
                 temperature=0.2,
@@ -211,6 +225,7 @@ stages = [
             ),
             LMConfig(
                 path='mistralai/Mistral-Small-3.1-24B-Instruct-2503', 
+                # path='Qwen/Qwen2-VL-7B-Instruct',
                 data_ratio=0.11, 
                 task_name='answer_generation',
                 temperature=0.2,
@@ -229,6 +244,7 @@ stages = [
             ),
             LMConfig(
                 path='gpt-4.1-mini',
+                # path='Qwen/Qwen2-VL-7B-Instruct',
                 data_ratio=0.25, 
                 task_name='answer_generation',
                 temperature=0.2,  # Lower temperature for more consistent answers
@@ -239,6 +255,7 @@ stages = [
             ),
             LMConfig(
                 path='gemini-2.5-flash-preview-04-17',
+                # path='Qwen/Qwen2-VL-7B-Instruct',
                 data_ratio=0.25, 
                 task_name='answer_generation',
                 temperature=0.2,
@@ -249,6 +266,7 @@ stages = [
             ),
             LMConfig(
                 path='claude-3-5-haiku-latest',
+                # path='Qwen/Qwen2-VL-7B-Instruct',
                 data_ratio=0.15, 
                 task_name='answer_generation',
                 temperature=0.2,

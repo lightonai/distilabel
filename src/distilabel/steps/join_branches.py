@@ -76,8 +76,9 @@ class JoinParallelBranches(GlobalStep):
                 # If a branch has multiple rows with the same join_val, raise a warning
                 if grouped_by_join_cols[join_val][branch_idx] is not None:
                     self._logger.warning((
-                        f"Duplicate values in {self.join_on_col} column: {join_val} in JoinParallelBranches step {self.name}. "
-                        "This will cause some rows to be dropped, normally you want the join_val to be unique to a branch."
+                        f"Duplicate values in column {self.join_on_cols}: {join_val=} in JoinParallelBranches step {self.name}. "
+                        "This will cause some rows to be dropped, normally you want the join_val to be unique to a branch. "
+                        "This can be a false alarm if a model previously generated duplicate outputs."
                     )
                 )
                 grouped_by_join_cols[join_val][branch_idx] = row
@@ -93,3 +94,4 @@ class JoinParallelBranches(GlobalStep):
             # Else, at least one branch did not have this join_val, so we drop these rows
 
         yield merged_rows
+        

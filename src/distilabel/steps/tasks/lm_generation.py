@@ -31,6 +31,7 @@ class LMGenerationTask(Task):
     lm_input_col_prefixes: list[str] = []
     input_formatter: Callable = Field(default=lambda **kwargs: kwargs, exclude=True)
     extra_cols: list[str] = []
+    use_cache: bool = True
 
     @model_validator(mode='after')
     def valid_prefix_length(self) -> 'LMGenerationTask':
@@ -46,6 +47,7 @@ class LMGenerationTask(Task):
         # add_raw_input is set to False because if it has image type messages, they can't be formatted in a pytable
         super().load()
         self.add_raw_input = False
+        self.lm_config.lm_response_cache_root = self.cache_location['lm_cache']
     
     @property
     def pydantic_fields(self) -> list[str]:
@@ -67,6 +69,7 @@ class LMGenerationTask(Task):
     def format_output(self, output: str | None, input: dict) -> dict:
         pydantic_output = {'generation': output}
         if self.lm_config.out_model is not None:
+            # if using structured output, split the generation into columns with names from the pydantic model
             none_dict = dict.fromkeys(self.pydantic_fields)
             load_pydantic = partial(self.lm_config.out_model.model_validate_json, strict=True)
 

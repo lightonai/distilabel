@@ -70,6 +70,9 @@ class LMConfig(BaseModel):
     vllm_kwargs: dict[str, Any] = {}
     '''kwargs passed directly to vllm. Use None as a value if the kwarg is just a flag'''
 
+    lm_response_cache_root: pth = Field(default_factory=pth)
+    '''root directory for the lm response cache, set by the step when created'''
+
     def model_post_init(self, context) -> None:
         if isinstance(self.out_model, str):
             self.out_model = getattr(sys.modules[__name__], self.out_model)

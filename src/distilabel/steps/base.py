@@ -203,7 +203,10 @@ class _Step(
     pipeline: Any = Field(default=None, exclude=True, repr=False)
     input_mappings: Dict[str, str] = {}
     output_mappings: Dict[str, str] = {}
-    use_cache: bool = True
+
+    cache_location: Dict[str, Path] = Field(default_factory=dict, exclude=True)
+    use_cache: bool = False
+    invalidate_cache: bool = False
 
     _pipeline_artifacts_path: Path = PrivateAttr(None)
     _built_from_decorator: bool = PrivateAttr(default=False)
@@ -214,12 +217,13 @@ class _Step(
 
         super().model_post_init(__context)
 
+        self._logger = logging.getLogger(f"distilabel.step.{self.name}")
+
         if self.pipeline is None:
             self.pipeline = _GlobalPipelineManager.get_pipeline()
 
         if self.pipeline is None:
-            _logger = logging.getLogger(f"distilabel.step.{self.name}")
-            _logger.warning(
+            self._logger.warning(
                 f"Step '{self.name}' hasn't received a pipeline, and it hasn't been"
                 " created within a `Pipeline` context. Please, use"
                 " `with Pipeline() as pipeline:` and create the step within the context."
@@ -234,6 +238,7 @@ class _Step(
         if self.pipeline is not None:
             # If not set an error will be raised in `Pipeline.run` parent
             self.pipeline._add_step(self)
+            self.cache_location = self.pipeline._cache_location
 
     def connect(
         self,
@@ -357,7 +362,7 @@ class _Step(
         """Method to perform any initialization logic before the `process` method is
         called. For example, to load an LLM, stablish a connection to a database, etc.
         """
-        self._logger = logging.getLogger(f"distilabel.step.{self.name}")
+        pass
 
     def unload(self) -> None:
         """Method to perform any cleanup logic after the `process` method is called. For

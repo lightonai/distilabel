@@ -46,10 +46,14 @@ class RoutingBatchFunction(BaseModel, _Serializable):
         _step: The upstream step that is connected to the routing batch function.
         _routed_batch_registry: A dictionary that keeps track of the batches that have been
             routed to specific downstream steps.
+        invalidate_cache: If true, reroute batches instead of using the cached routed_to.
+            This is needed if you update the routing function but still want to resume progress
+            where possible.
     """
 
     routing_function: RoutingBatchFunc
     description: Optional[str] = None
+    invalidate_cache: bool = False
 
     _step: Union["_Step", None] = PrivateAttr(default=None)
     _routed_batch_registry: Dict[str, Dict[int, List[str]]] = PrivateAttr(
@@ -238,12 +242,16 @@ class RoutingBatchFunction(BaseModel, _Serializable):
 
 def routing_batch_function(
     description: Optional[str] = None,
+    invalidate_cache: bool = False,
 ) -> Callable[[RoutingBatchFunc], RoutingBatchFunction]:
     """Creates a routing batch function that can be used to route batches from one upstream
     step to specific downstream steps.
 
     Args:
         description: An optional description for the routing batch function.
+        invalidate_cache: If true, reroute batches instead of using the cached routed_to.
+            This is needed if you update the routing function but still want to resume progress
+            where possible.
 
     Returns:
         A `RoutingBatchFunction` instance that can be used with the `>>` operators and with
@@ -305,6 +313,7 @@ def routing_batch_function(
         routing_batch_function = RoutingBatchFunction(
             routing_function=func,
             description=description,
+            invalidate_cache=invalidate_cache,
         )
 
         if (

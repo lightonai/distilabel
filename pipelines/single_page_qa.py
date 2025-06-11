@@ -43,7 +43,7 @@ def run_pipeline(config: Config):
     with Pipeline(
         name="single_page_qa",
         description="Load mp synthetic data, sample system prompts and generate questions and answers",
-        cache_dir='out/distilabel_cache',
+        cache_dir='out/distilabel_cache_sp_2',
     ) as pipeline:
         ################## STAGE 0: GENERATE QUESTIONS ##################
         stage = stages[STAGE]
@@ -105,12 +105,17 @@ def run_pipeline(config: Config):
             for i, lm in enumerate(lms)
         ]  # cols: ['source', 'question', ...] -> ['answer', 'answer_system', 'answer_model_name', ...]
         
-        collect_answers = NoOp(name='collect_answers', input_batch_size=32)
+        drop_none_answers = FilterRows(
+            name="drop_none_answers",
+            cols=['answer'],
+            condition=utils.generation_is_structured,
+            input_batch_size=32,
+        )
 
         ## Pipeline
         (
             load_data >> data_router >> generate_questions >> questions_to_rows >> drop_none_questions >>
-            answer_data_router >> generate_answers >> collect_answers
+            answer_data_router >> generate_answers >> drop_none_answers
         )
     
     distiset = pipeline.run(
@@ -121,7 +126,7 @@ def run_pipeline(config: Config):
                 len(stage.available_gpus),
             ) + 
             pipe_utils.steps_to_load_groups(
-                [*generate_answers, collect_answers],
+                [*generate_answers, drop_none_answers],
                 len(stage.available_gpus),
             )
         ),

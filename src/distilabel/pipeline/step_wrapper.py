@@ -14,6 +14,7 @@
 
 import traceback
 import time
+from pathlib import Path
 from queue import Queue
 from multiprocessing.synchronize import Lock
 from typing import Any, Dict, List, Optional, Union, cast
@@ -50,6 +51,7 @@ class _StepWrapper:
         dry_run: bool = False,
         ray_pipeline: bool = False,
         is_route_step: bool = False,
+        cache_location: Path = Path(),
     ) -> None:
         """Initializes the `_ProcessWrapper`.
 
@@ -62,6 +64,7 @@ class _StepWrapper:
             dry_run: Flag to ensure we are forcing to run the last batch.
             ray_pipeline: Whether the step is running a `RayPipeline` or not.
             is_route_step: Whether the step is a route step.
+            cache_location: The root directory of the batches cache.
         """
         self.step = step
         self.replica = replica
@@ -72,9 +75,8 @@ class _StepWrapper:
         self.ray_pipeline = ray_pipeline
         self.is_route_step = is_route_step
         self._init_cuda_device_placement()
-
-        self._received_batches = []
-        self._sent_batches = []
+        self._loaded = False
+        self._cache_location = cache_location
 
     def _init_cuda_device_placement(self) -> None:
         """Sets the LLM identifier and the number of desired GPUs of the `CudaDevicePlacementMixin`"""
@@ -97,25 +99,15 @@ class _StepWrapper:
 
     def run(self) -> str:
         """The target function executed by the process. This function will also handle
-        the step lifecycle, executing first the `load` function of the `Step` and then
-        waiting to receive a batch from the `input_queue` that will be handled by the
-        `process` method of the `Step`.
+        the step lifecycle. For `GeneratorStep`s it will execute the `load` method first.
+        For normal `Step`s, the `load` method will be executed lazily when the first
+        batch is received.
 
         Returns:
             The name of the step that was executed.
         """
-
-        try:
-            self.step.load()
-            self.step._logger.debug(f"Step '{self.step.name}' loaded!")
-        except Exception as e:
-            self.step.unload()
-            self._notify_load_failed()
-            raise _StepWrapperException.create_load_error(
-                message=f"Step load failed: {e}",
-                step=self.step,
-                subprocess_exception=e,
-            ) from e
+        if self.step.is_generator:
+            self.load_step()
 
         self._notify_load()
 
@@ -125,17 +117,19 @@ class _StepWrapper:
             else:
                 self._non_generator_process_loop()
         except Exception as e:
+            if self._loaded:
+                self.step.unload()
+
+            # if it's not a load error, we need to notify unload.
+            if not (isinstance(e, _StepWrapperException) and e.is_load_error):
+                self._notify_unload()
+
+            if not isinstance(e, _StepWrapperException):
+                raise _StepWrapperException(str(e), self.step, 2, e) from e
+            raise e
+
+        if self._loaded:
             self.step.unload()
-            self._notify_unload()
-            raise _StepWrapperException(str(e), self.step, 2, e) from e
-
-        # Just in case `None` sentinel was sent
-        # try:
-        #     self.input_queue.get(block=False)
-        # except Exception:
-        #     pass
-
-        self.step.unload()
 
         self._notify_unload()
 
@@ -144,6 +138,20 @@ class _StepWrapper:
         )
 
         return self.step.name  # type: ignore
+
+    def load_step(self) -> None:
+        """Loads the step."""
+        try:
+            self.step.load()
+            self._loaded = True
+        except Exception as e:
+            self.step.unload()
+            self._notify_load_failed()
+            raise _StepWrapperException.create_load_error(
+                message=f"Step load failed: {e}",
+                step=self.step,
+                subprocess_exception=e,
+            ) from e
 
     def _notify_load(self) -> None:
         """Notifies that the step has finished executing its `load` function successfully."""
@@ -165,6 +173,15 @@ class _StepWrapper:
             f"Notifying load failed of step '{self.step.name}' (replica ID {self.replica})..."
         )
         self.load_queue.put({"name": self.step.name, "status": "load_failed"})  # type: ignore
+
+    def cache_key(self, batch: "_Batch") -> Path:
+        # the cache maps (batch, step its going to) -> (response)
+        # if the same batch goes to the same type of step, 
+        # then we expect the same response and load it from the cache
+        step_class_name = self.step.__class__.__name__
+        return (
+            self._cache_location / f'{batch.signature}_{step_class_name}.json'
+        )
 
     def _generator_step_process_loop(self) -> None:
         """Runs the process loop for a generator step. It will call the `process` method
@@ -246,6 +263,9 @@ class _StepWrapper:
                 )
                 break
 
+            # get the cache key before any modifications to the received batch
+            # so that we can correctly map the sent batch to the response
+            cache_key = self.cache_key(batch) if isinstance(batch, _Batch) else Path('none')
             # Since only one of the route steps will receive a batch with last_batch = True, if this step is a route step, 
             # it likely won't receive a batch with last_batch = True and needs to create this
             # itself once it knows which batch is actually the last one for it.
@@ -259,10 +279,31 @@ class _StepWrapper:
                 and all(b in [LAST_BATCH_SENT_FLAG, None] for b in q_contents)
             ):
                 batch.route_step_last_batch = True # type: ignore
+            
+            # handle cache hit
+            # but we want route_step_last_batch logic to be handled normally
+            # so it comes after that
+            if (
+                _Batch.cached(cache_key) 
+                and not self.step.invalidate_cache
+                and self.step.use_cache
+            ):
+                response = _Batch.from_json(cache_key)
+                response.route_step_last_batch = batch.route_step_last_batch
+                self._send_batch(response)
+                self.step._logger.info(f"🔍 Cache hit for batch {batch.seq_no}")
+                if response.last_batch or response.route_step_last_batch:
+                    break
+                continue
 
             if batch == LAST_BATCH_SENT_FLAG:
                 self.step._logger.debug("Received `LAST_BATCH_SENT_FLAG`. Stopping...")
                 break
+
+            # lazy loading of the step, if we end up with all cache hits,
+            # we don't need to load the step
+            if not self._loaded:
+                self.load_step()
 
             self.step._logger.info(
                 f"📦 Processing batch {batch.seq_no} in '{batch.step_name}' (replica ID: {self.replica})"
@@ -304,19 +345,13 @@ class _StepWrapper:
                     f"Subprocess traceback:\n\n{traceback.format_exc()}"
                 )
             finally:
-                from copy import deepcopy
-                self._received_batches.append(deepcopy(batch))
-                self._sent_batches.append(deepcopy(result))
                 batch.set_data([result])
+                if self.step.use_cache:
+                    batch.cache(cache_key)
                 self._send_batch(batch)
 
             if batch.last_batch or batch.route_step_last_batch:
                 break
-        
-        # debug = True
-        # while debug and 'answer' in self.step.name:
-        #     time.sleep(1)
-        #     pass
 
     def _impute_step_outputs(self, batch: "_Batch") -> List[Dict[str, Any]]:
         """Imputes the step outputs columns with `None` in the batch data.

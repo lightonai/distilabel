@@ -17,6 +17,7 @@ class NoOp(Step):
         (this will throw an error, so we use this step to avoid that)  
     3. When you need to join a convergence step and another step's results, you have to send the convergence step's results
         through this step before distilabel will let you join with the other step's results.
+    4. When you need to break up a global step's results into batches (say so they don't all get routed together)
 
     You'll need to specify the `cols` argument if you want to rename columns cause they have to be within
     the inputs/outputs of the step.
