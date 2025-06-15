@@ -31,7 +31,7 @@ class LMGenerationTask(Task):
     lm_input_col_prefixes: list[str] = []
     input_formatter: Callable = Field(default=lambda **kwargs: kwargs, exclude=True)
     extra_cols: list[str] = []
-    use_cache: bool = True
+    use_cache: bool = True  # this affects the batch level caching, not the lm level caching
 
     @model_validator(mode='after')
     def valid_prefix_length(self) -> 'LMGenerationTask':

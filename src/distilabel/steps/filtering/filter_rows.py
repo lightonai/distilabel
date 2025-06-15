@@ -14,6 +14,12 @@ class FilterRows(Step):
 
     If the condition is met, the row is kept, otherwise it is dropped.
 
+    If `cols` is not passed, the condition is only passed the row. This allows you to e.g.
+    condition=utils.logical_and_filters(
+        partial(utils.generation_is_structured, cols=['generation']),
+        partial(utils.logical_not_filter(utils.cols_true), cols=['is_references_page']),
+    )
+
     Example:
     ---
     ```python
@@ -23,7 +29,7 @@ class FilterRows(Step):
     )
     ```
     '''
-    cols: list[str]
+    cols: list[str] | None = None
     condition: Callable = Field(default=lambda **kwargs: True, exclude=True)
 
     @property
@@ -38,5 +44,8 @@ class FilterRows(Step):
         for step_input in inputs:
             yield [
                 row for row in step_input
-                if self.condition(row, self.cols)
+                if (
+                    self.condition(row, self.cols) if self.cols is not None 
+                    else self.condition(row)  # allow specifying cols with partial or taking the whole row
+                )
             ]

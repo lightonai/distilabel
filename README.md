@@ -193,6 +193,11 @@ To directly contribute with `distilabel`, check our [good first issues](https://
     - If you change a step's code or a routing batch function's code, caching can't detect this, but you can pass `invalidate_cache=True` to them to tell them to redo things. You can also pass `invalidate_distiset=True` to the pipeline to not used the distiset which is cached on completion of a pipeline.
     - Caching at the step level is turned off by default except for LMGenerationTask (to save disk space for cheap, deterministic steps). Just set `use_cache=True` when creating anything inheriting from `_Step` to turn it on.
     - As a backup to the sensitivity, there is LLM level caching also, so that LLM responses are not recomputed. The downside is this won't stop the step from being loaded (i.e. the vllm server startup) when all the LLM responses are cached. This is also sensitive to any randomness such as prompt sampling in your pipeline, so be aware of that.
+  - An explanation of caching levels and setting `use_cache=True/False` and `invalidate_cache=True/False`.
+    - There are 3 levels of caching:
+      - Batch level: controlled by `use_cache` and `invalidate_cache` when initializing the `Step/Task`
+      - LM Request Level: controlled by `use_cache` and `invalidate_cache` when initializing the OpenAILM.
+      - Distiset level: controlled by `use_cache` and `invalidate_distiset` when calling `pipeline.run()`.
 
 ## Notes on Distilabel (Issues and Helpful Knowledge)
 - **Short Version**: distilabel is very particular about how things are done, so there's a reason why every line is the way it is and I recommend starting off of one of the existing pipelines. Also, reading my code for e.g. the single page pipeline will tell you how to build on top of distilabel. Use the rest of this list as an issue tracker so people know how to solve issues in the future.

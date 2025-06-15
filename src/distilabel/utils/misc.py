@@ -1,5 +1,6 @@
 import os
 from PIL import Image
+from functools import partial
 import io
 import hashlib
 import json
@@ -271,17 +272,26 @@ def cols_true(row: dict, cols: list[str]) -> bool:
     '''Bool indicator of whether all of the cols are True'''
     return all([row[col] for col in cols])
 
+def _not_filter(*args, filter: Callable = lambda *args, **kwargs: False, **kwargs):
+    return not filter(*args, **kwargs)
+
 def logical_not_filter(filter: Callable) -> Callable:
     '''Return a filter that is the logical negation of the filter'''
-    return lambda *args, **kwargs: not filter(*args, **kwargs)
+    return partial(_not_filter, filter=filter)
+
+def _and_filter(*args, filters: list[Callable] = [], **kwargs):
+    return all([f(*args, **kwargs) for f in filters])
 
 def logical_and_filters(*filters: list[Callable]) -> Callable:
     '''Return a filter that is the logical AND of the filters'''
-    return lambda *args, **kwargs: all([f(*args, **kwargs) for f in filters])
+    return partial(_and_filter, filters=filters)
+
+def _or_filter(*args, filters: list[Callable] = [], **kwargs):
+    return any([f(*args, **kwargs) for f in filters])
 
 def logical_or_filters(*filters: list[Callable]) -> Callable:
     '''Return a filter that is the logical OR of the filters'''
-    return lambda *args, **kwargs: any([f(*args, **kwargs) for f in filters])
+    return partial(_or_filter, filters=filters)
 
 def load_pydantic(path, config_class):
     '''load yaml config and convert into pydantic config'''

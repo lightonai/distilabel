@@ -86,7 +86,7 @@ def multi_branch_data_router(
     
     return router
 
-def make_lms(config: Config, stage: Stage) -> list[OpenAILM]:
+def make_lms(config: Config, stage: Stage, use_cache: bool = True) -> list[OpenAILM]:
     '''initialize lms for a stage'''
     return [
         OpenAILM(
@@ -98,6 +98,7 @@ def make_lms(config: Config, stage: Stage) -> list[OpenAILM]:
                 'max_new_tokens': lm_config.max_new_tokens,
             },
             debug_with_running_vllm=config.debug_with_running_vllm,
+            use_cache=use_cache,
         ) 
         for lm_config in stage.lm_configs
     ]

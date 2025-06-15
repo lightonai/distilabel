@@ -28,15 +28,6 @@ from distilabel.configs.lm_filter_dataset import config
 STAGE = 0
 '''tracks the current stage of the pipeline'''
 
-def lm_task_router(lm: OpenAILM, **kwargs) -> Task:
-    # Here as a demonstration of general versatility in configuring pipelines, you may want different LMs running different tasks
-    match lm.lm_config.task_name:
-        case ('question_generation' | 'answer_generation'):
-            return LMGenerationTask(llm=lm, **kwargs)
-        case _:
-            raise ValueError(f"Unknown task name: {lm.lm_config.task_name}")
-
-
 
 def run_pipeline(config: Config):
     global STAGE
@@ -59,18 +50,18 @@ def run_pipeline(config: Config):
         data_router = pipe_utils.data_router(
             step_distribution=[lm_config.data_ratio for lm_config in stage.lm_configs]
         )
-        lms = pipe_utils.make_lms(config, stage)
+        lms = pipe_utils.make_lms(config, stage)  # use_cache=False  # turn off lm level caching
         label_references = [
-            lm_task_router(
+            LMGenerationTask(
                 name=f"label_references_{i}",
                 stage=stage,
-                lm=lm,
+                llm=lm,
                 lm_config=lm.lm_config,
                 input_formatter=lm._format_input,
-                lm_input_cols=['question'],
                 input_batch_size=256,
                 resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.tp_size),
                 output_mappings={'system': 'references_system', 'model_name': 'references_model_name'},
+                # use_cache=False,  # turn off batch level caching
                 **lm.lm_config.task_kwargs,
             ) 
             for i, lm in enumerate(lms)
@@ -79,8 +70,8 @@ def run_pipeline(config: Config):
             name="drop_reference_pages",
             cols=['is_references_page'],
             condition=utils.logical_and_filters(
-                utils.generation_is_structured,
-                utils.cols_true,
+                utils.generation_is_structured,  # structured output successful
+                utils.logical_not_filter(utils.cols_true),  # is not a references page
             ),
             input_batch_size=256,
         )  # cols: ['is_references_page', ...] -> ['is_references_page', ...]
@@ -98,7 +89,7 @@ def run_pipeline(config: Config):
                 len(stage.available_gpus),
             )
         ),
-        use_cache=True,
+        # use_cache=False,  # turn off distiset level caching
     )
     return distiset
 
@@ -106,5 +97,5 @@ if __name__ == "__main__":
     distiset = run_pipeline(config)['default']['train']
     distiset = distiset.remove_columns(['distilabel_metadata'])  # don't need this for this pipeline
 
-    distiset.save_to_disk('out/scraped_v0.3_with_txt_img_neg_references_filtered')
+    # distiset.save_to_disk('out/scraped_v0.3_with_txt_img_neg_references_filtered')
     

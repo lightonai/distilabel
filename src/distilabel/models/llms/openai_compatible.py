@@ -289,7 +289,7 @@ class OpenAILM(OpenAILLM, CudaDevicePlacementMixin, VLM):
             self._vllm_api = vLLMAPI(self.lm_config)
             self.base_url = f'http://localhost:{self._vllm_api.port}/v1'
             if self.debug_with_running_vllm:
-                self.base_url = 'http://localhost:8000/v1'
+                self.base_url = 'http://localhost:32166/v1'
 
         # must come after the base_url is set properly
         super().load()
