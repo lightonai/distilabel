@@ -57,9 +57,6 @@ def run_pipeline(config: Config):
     aps = utils.sort_adjacent_pages(aps)
     dataset = (hns + aps)
 
-    # import random
-    # dataset = random.sample(dataset, 100)
-
     with Pipeline(
         name='true_multi_page_qa',
         description=(
@@ -235,7 +232,8 @@ def run_pipeline(config: Config):
         
         rejoin_pages = Rejoin(
             name='rejoin_pages', 
-            input_col='source', 
+            input_col='source',
+            drop_incomplete_rows=True,
             duplicates_cols={
                 # see the docstring for Rejoin for the necessity of this set
                 'question', 
@@ -344,7 +342,7 @@ if __name__ == '__main__':
         distiset = distiset['default']['train'].remove_columns(['distilabel_metadata', 'drop'])
         dataset = load_from_disk('out/mp_synthetic_data')['multi_page_questions']
         dataset = list(dataset)
-        distiset = utils.replace_source_col(distiset, dataset)
+        # distiset = utils.replace_source_col(distiset, dataset)
         
         hns = distiset.filter(lambda x: x['split'] == 'hard_negs_short')
         aps = distiset.filter(lambda x: x['split'] == 'adjacent_pages_short')

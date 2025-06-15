@@ -1,0 +1,6 @@
+Determine if the given page is more than half a bibliography/references page.
+
+Here is the output format, provide nothing except this:
+{{
+  "is_references_page": bool
+}}

@@ -148,3 +148,6 @@ class SatisfactoryAnswer(BaseModel):
         if all(self.question_requirements_met):
             self.question_fully_answered = True
         return self
+
+class ReferencePage(BaseModel):
+    is_references_page: bool

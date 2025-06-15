@@ -162,7 +162,7 @@ def replace_source_col(distiset: Dataset, dataset: list[dict]):
     to retain the original order
     '''
     map_to_source = {frozenset(row['source']): row['source'] for row in dataset}
-    distiset = distiset.map(lambda x: {'source': map_to_source.get(frozenset(x['source']))}, num_proc=1)
+    distiset = distiset.map(lambda x: {'source': map_to_source.get(frozenset(x['source']))}, num_proc=16)
     distiset = distiset.filter(lambda x: x['source'] is not None)
     return distiset
 
@@ -266,6 +266,22 @@ def hash_structure_with_images(obj: Any) -> str:
 def generation_is_structured(row: dict, cols: list[str]) -> bool:
     '''Bool indicator of whether any of the cols are None'''
     return all([row[col] is not None for col in cols])
+
+def cols_true(row: dict, cols: list[str]) -> bool:
+    '''Bool indicator of whether all of the cols are True'''
+    return all([row[col] for col in cols])
+
+def logical_not_filter(filter: Callable) -> Callable:
+    '''Return a filter that is the logical negation of the filter'''
+    return lambda *args, **kwargs: not filter(*args, **kwargs)
+
+def logical_and_filters(*filters: list[Callable]) -> Callable:
+    '''Return a filter that is the logical AND of the filters'''
+    return lambda *args, **kwargs: all([f(*args, **kwargs) for f in filters])
+
+def logical_or_filters(*filters: list[Callable]) -> Callable:
+    '''Return a filter that is the logical OR of the filters'''
+    return lambda *args, **kwargs: any([f(*args, **kwargs) for f in filters])
 
 def load_pydantic(path, config_class):
     '''load yaml config and convert into pydantic config'''

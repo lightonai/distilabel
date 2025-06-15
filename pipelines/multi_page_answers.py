@@ -1,5 +1,6 @@
 from distilabel.pipeline import Pipeline
 from datasets import load_from_disk, Dataset
+import random
 
 from distilabel.steps import (
     StepResources, 
@@ -33,6 +34,7 @@ def lm_task_router(lm: OpenAILM, **kwargs) -> Task:
 
 def run_pipeline(config: Config):
     global STAGE
+    random.seed(0)
     
     stages = config.stages
     dataset = load_from_disk('out/mp_synthetic_data')
@@ -50,11 +52,11 @@ def run_pipeline(config: Config):
     with Pipeline(
         name="multi_page_answers",
         description="Generate answers for the single page questions using multi-page context",
-        cache_dir='out/distilabel_cache',
+        cache_dir='out/multi_page_answers',
     ) as pipeline:
         ################## STAGE 0 ##################
         stage = stages[STAGE]
-        load_data = LoadDataFromDicts(name="load_data", data=dataset, batch_size=16)  # cols: ['source', 'question', ...]
+        load_data = LoadDataFromDicts(name="load_data", data=dataset, batch_size=64)  # cols: ['source', 'question', ...]
         data_router = pipe_utils.data_router(
             step_distribution=[lm_config.data_ratio for lm_config in stage.lm_configs]
         )
@@ -67,7 +69,7 @@ def run_pipeline(config: Config):
                 lm_config=lm.lm_config,
                 input_formatter=lm._format_input,
                 lm_input_cols=['question'],
-                input_batch_size=16,
+                input_batch_size=64,
                 resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.tp_size),
                 output_mappings={'system': 'answer_system', 'model_name': 'answer_model_name', 'generation': 'answer'},
                 **lm.lm_config.task_kwargs,
@@ -78,7 +80,7 @@ def run_pipeline(config: Config):
             name="drop_none_answers",
             cols=['answer'],
             condition=utils.generation_is_structured,
-            input_batch_size=16,
+            input_batch_size=64,
         )  # cols: ['answer', ...] -> ['answer', ...]
 
         ## Pipeline
@@ -105,7 +107,7 @@ if __name__ == "__main__":
     # replace the source col with the original dataset to retain the original order
     dataset = load_from_disk('out/mp_synthetic_data')
     dataset = list(dataset['hard_negs_short']) + list(dataset['adjacent_pages_short'])
-    distiset = utils.replace_source_col(distiset, dataset)
+    # distiset = utils.replace_source_col(distiset, dataset)
 
     hard_negs_short = distiset.filter(lambda x: x['split'] == 'hard_negs_short').remove_columns(['split'])
     adjacent_pages_short = distiset.filter(lambda x: x['split'] == 'adjacent_pages_short').remove_columns(['split'])

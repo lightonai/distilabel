@@ -87,7 +87,7 @@ lm_configs=[
     ),
 ]
 
-AVAILABLE_GPUS = [0, 1, 2, 3]
+AVAILABLE_GPUS = [4, 5, 6, 7]
 stages = [
     Stage(
         lm_configs=lm_configs,

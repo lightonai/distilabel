@@ -16,6 +16,7 @@ Important guidelines:
 - Questions should NOT be answerable by looking at any single page in isolation
 - Questions should require connecting or synthesizing information across multiple pages
 - Questions should be clear, specific, and focused
+- Questions should not point to a page by position or number (do not specify which page you are talking about)
 - Questions should encourage detailed responses that demonstrate understanding of multiple pages
 
 Here is the output format, provide nothing except this:

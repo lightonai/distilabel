@@ -51,6 +51,10 @@ from .misc import (
     save_jsonl,
     load_jsonl,
     hash_structure_with_images,
+    cols_true,
+    logical_not_filter,
+    logical_and_filters,
+    logical_or_filters,
 )
 
 __all__ = [
@@ -90,4 +94,8 @@ __all__ = [
     "save_jsonl",
     "load_jsonl",
     "hash_structure_with_images",
+    "cols_true",
+    "logical_not_filter",
+    "logical_and_filters",
+    "logical_or_filters",
 ]
