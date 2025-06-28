@@ -33,6 +33,7 @@ from distilabel.models.llms.vllm_api import vLLMAPI
 from distilabel.models.llms.openai_compatible import OpenAILM
 from distilabel.models.mixins.cuda_device_placement import CudaDevicePlacementMixin
 from distilabel.typing import GenerateOutput, HiddenState
+from distilabel.models.llms.lm_cache import get_lm_cache
 
 __all__ = [
     "LLM",
@@ -60,4 +61,5 @@ __all__ = [
     "VertexAILLM",
     "vLLM",
     "vLLMAPI",
+    "get_lm_cache",
 ]

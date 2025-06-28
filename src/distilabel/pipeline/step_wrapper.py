@@ -246,15 +246,16 @@ class _StepWrapper:
                     # ensure that we can determine if the current batch is the actual
                     # last batch for this specific route, as the main `last_batch` flag
                     # from the predecessor might go to a different route.
-                    q_contents = self.input_queue.items()
-                    if (
-                        len([b for b in q_contents if b not in [LAST_BATCH_SENT_FLAG, None]]) > 1
+                    pop_if = lambda q_contents: (
+                        len([b for b in q_contents if b not in [LAST_BATCH_SENT_FLAG, None]]) >= 2
                         or LAST_BATCH_SENT_FLAG in q_contents
-                    ):
+                    )
+                    q_contents, batch = self.input_queue.items(pop_if=pop_if)
+                    if batch is not None:
                         break
                     time.sleep(5) # Wait if conditions not met
-
-            batch = self.input_queue.get() # This is a blocking call
+            else:
+                batch, q_contents = self.input_queue.get(return_snapshot=True)
 
             if batch is None:
                 self.step._logger.info(
@@ -270,12 +271,10 @@ class _StepWrapper:
             # it likely won't receive a batch with last_batch = True and needs to create this
             # itself once it knows which batch is actually the last one for it.
             # Re-inspect the queue after getting the current batch.
-            # The `q_contents` from before the `get()` might be stale.
-            q_contents = self.input_queue.items() # type: ignore
             if (
                 self.is_route_step
                 and batch != LAST_BATCH_SENT_FLAG
-                and len(q_contents) >= 0 # Simpler check: if anything (even just flags) is left or not
+                and len(q_contents) > 0 # check if anything (even just flags) is left or not
                 and all(b in [LAST_BATCH_SENT_FLAG, None] for b in q_contents)
             ):
                 batch.route_step_last_batch = True # type: ignore

@@ -41,6 +41,7 @@ dependencies = [
     "vllm >= 0.8.1",
     "pdf2image >= 1.17.0",
     "setuptools",
+    "tenacity",
 ]
 dynamic = ["version"]
 

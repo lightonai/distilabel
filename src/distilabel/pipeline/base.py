@@ -62,6 +62,7 @@ from distilabel.utils.typing_ import (
     is_type_pydantic_secret_field,
 )
 from distilabel.utils import save_jsonl, load_jsonl
+from distilabel.models.llms import get_lm_cache
 if TYPE_CHECKING:
     from os import PathLike
     from queue import Queue
@@ -1634,8 +1635,11 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
 
             # Modified logic: Always request the next batch from the generator
             # unless the current batch was the last one. Should handle the len(self.dag) == 1 case.
+            # if not batch.last_batch:
+            #     self._request_batch_from_generator(step.name)  # type: ignore
             if not batch.last_batch:
-                self._request_batch_from_generator(step.name)  # type: ignore
+                for _ in range(32):  # get batches flowing quickly by requesting more than came in
+                    self._request_batch_from_generator(step.name)  # type: ignore
 
         if batch.last_batch:
             self._clear_batch_manager_route_steps(successors)
@@ -2045,6 +2049,90 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
         log_msg += f'{self._stages_last_batch=}\n{stage_last_steps=}\n'
         log_msg += '=' * 50
         return log_msg
+
+    def get_lm_cache_stats(self) -> Dict[str, Any]:
+        """Get statistics about the language model cache.
+        
+        Returns:
+            Dictionary containing cache statistics including total entries,
+            entries by model, and database size.
+        """
+        try:
+            cache_dir = self._cache_location["lm_cache"]
+            lm_cache_db = get_lm_cache(cache_dir)
+            return lm_cache_db.get_stats()
+        except Exception as e:
+            self._logger.warning(f"Failed to get LM cache stats: {e}")
+            return {}
+    
+    def clear_lm_cache(
+        self, 
+        model_name: Optional[str] = None, 
+        max_age_days: Optional[int] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None
+    ) -> int:
+        """Clear language model cache entries.
+        
+        Args:
+            model_name: If provided, only clear cache entries for this model.
+            max_age_days: If provided, only clear entries older than this many days.
+            start_date: Start date for date range clearing (YYYY-MM-DD format).
+            end_date: End date for date range clearing (YYYY-MM-DD format).
+            
+        Note:
+            max_age_days and date range (start_date/end_date) are mutually exclusive.
+            
+        Returns:
+            Number of entries cleared.
+        """
+        model_name = str(model_name) if model_name is not None else None
+        max_age_days = int(max_age_days) if max_age_days is not None else None
+        
+        if max_age_days is not None and (start_date is not None or end_date is not None):
+            raise ValueError("max_age_days and date range (start_date/end_date) are mutually exclusive")
+        
+        try:
+            cache_dir = self._cache_location["lm_cache"]
+            lm_cache_db = get_lm_cache(cache_dir)
+            
+            if model_name:
+                cleared = lm_cache_db.clear_model_cache(model_name)
+                self._logger.info(f"Cleared {cleared} cache entries for model '{model_name}'")
+            elif max_age_days:
+                cleared = lm_cache_db.clear_old_entries(max_age_days)
+                self._logger.info(f"Cleared {cleared} cache entries older than {max_age_days} days")
+            elif start_date is not None or end_date is not None:
+                cleared = lm_cache_db.clear_date_range(start_date, end_date)
+                date_range_str = f"from {start_date or 'beginning'} to {end_date or 'end'}"
+                self._logger.info(f"Cleared {cleared} cache entries in date range {date_range_str}")
+            else:
+                # Clear all entries
+                stats = lm_cache_db.get_stats()
+                total_entries = stats.get('total_entries', 0)
+                for model in stats.get('model_counts', {}):
+                    lm_cache_db.clear_model_cache(model)
+                cleared = total_entries
+                self._logger.info(f"Cleared all {cleared} cache entries")
+            
+            return cleared
+        except Exception as e:
+            self._logger.warning(f"Failed to clear LM cache: {e}")
+            return 0
+    
+    def optimize_lm_cache(self) -> None:
+        """Optimize the language model cache database.
+        
+        This runs a VACUUM operation on the SQLite database to reclaim space
+        and optimize performance after clearing entries.
+        """
+        try:
+            cache_dir = self._cache_location["lm_cache"]
+            lm_cache_db = get_lm_cache(cache_dir)
+            lm_cache_db.vacuum()
+            self._logger.info("LM cache database optimized")
+        except Exception as e:
+            self._logger.warning(f"Failed to optimize LM cache: {e}")
 
 
 def set_pipeline_running_env_variables(

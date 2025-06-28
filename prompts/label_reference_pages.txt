@@ -1,6 +1,8 @@
 Determine if the given page is more than half a bibliography/references page.
+Also estimate the number of words on the page.
 
 Here is the output format, provide nothing except this:
 {{
-  "is_references_page": bool
+  "is_references_page": bool,
+  "word_count": int,
 }}

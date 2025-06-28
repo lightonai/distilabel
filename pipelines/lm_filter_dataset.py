@@ -35,14 +35,14 @@ def run_pipeline(config: Config):
     
     stages = config.stages
     dataset = load_from_disk('/mnt/nfs/dse/scraped_v0.3_with_txt_img_neg')
-    dataset = dataset.select(range(1024))
+    dataset = dataset.select(range(50000))
     dataset = list(dataset.remove_columns([col for col in dataset.column_names if col != 'image_filename']))
     dataset = [{'source': [row['image_filename']]} for row in dataset]
 
     with Pipeline(
         name="remove_reference_pages",
         description="Use a LM to find reference/bibliography pages in the scraped data and remove them.",
-        cache_dir='out/remove_references',
+        cache_dir='out/remove_references_debug',
     ) as pipeline:
         ################## STAGE 0 ##################
         stage = stages[STAGE]
@@ -90,6 +90,7 @@ def run_pipeline(config: Config):
             )
         ),
         # use_cache=False,  # turn off distiset level caching
+        invalidate_distiset=True,
     )
     return distiset
 
@@ -97,5 +98,5 @@ if __name__ == "__main__":
     distiset = run_pipeline(config)['default']['train']
     distiset = distiset.remove_columns(['distilabel_metadata'])  # don't need this for this pipeline
 
-    # distiset.save_to_disk('out/scraped_v0.3_with_txt_img_neg_references_filtered')
+    distiset.save_to_disk('out/scraped_v0.3_with_txt_img_neg_references_filtered')
     

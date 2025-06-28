@@ -28,6 +28,7 @@ from typing import (
     Optional,
     Union,
     cast,
+    Tuple,
 )
 
 import tblib
@@ -102,7 +103,17 @@ class ManagedListQueue:
             self._list.append(item)
             self._condition.notify()
 
-    def get(self, block: bool = True, timeout: Optional[float] = None) -> Any:
+    def get(
+        self, 
+        block: bool = True, 
+        timeout: Optional[float] = None, 
+        return_snapshot: bool = False,
+    ) -> Any:
+        '''
+        If return_snapshot is True, the method will return a tuple with the item 
+        and a snapshot of the queue after the item is removed, gathered while holding
+        the internal condition lock.
+        '''
         with self._condition:
             if not block:
                 if self.empty():
@@ -119,12 +130,69 @@ class ManagedListQueue:
                     self._condition.wait(remaining)
             item = self._list.pop(0)
             self._condition.notify()
+            if return_snapshot:
+                snapshot = list(self._list)
+                return item, snapshot
             return item
 
-    def items(self) -> List[Any]:
-        """Returns a *copy* (snapshot) of all items currently in the list."""
+    def items(
+        self,
+        pop_if: Optional[Callable[[List[Any]], bool]] = None,
+    ) -> Union[List[Any], Tuple[List[Any], Optional[Any]]]:
+        """Returns a snapshot (*copy*) of the queue contents.
+
+        If *pop_if* is provided, the first element of the queue will be **atomically**
+        removed **and** returned together with the snapshot *after* removal **only if**
+        ``pop_if(snapshot_before)`` evaluates to *True*.
+
+        The whole operation is executed while holding the internal condition, so the
+        snapshot and the (possibly) removed element are consistent with each other and
+        no other process can interleave modifications in-between.
+
+        Parameters
+        ----------
+        pop_if : callable | None
+            A callable that receives a *copy* of the queue contents *before* any
+            removal. If it returns *True* the first element (index ``0``) is removed
+            and returned; otherwise the queue is left untouched. If *None* (default),
+            the method behaves exactly like the previous implementation and simply
+            returns a snapshot of the queue.
+
+        Returns
+        -------
+        list
+            The snapshot of the queue **after** the optional removal when
+            ``pop_if`` is *None*.
+        (list, Any | None)
+            When ``pop_if`` is given, the method returns a tuple where the first item
+            is the snapshot of the queue *after* the potential removal and the second
+            item is the element that was removed (or *None* if nothing was popped).
+        """
+
         with self._condition:
-            return list(self._list)
+            # Fast-path: keep backward-compatibility if no *pop_if* has been provided.
+            if pop_if is None:
+                return list(self._list)
+
+            snapshot_before: List[Any] = list(self._list)
+            popped_item: Optional[Any] = None
+
+            try:
+                should_pop = pop_if(snapshot_before)
+            except Exception:
+                # Ensure that an error in the user supplied predicate does not leave
+                # the queue in an inconsistent state. Re-raise after releasing lock.
+                # I am unsure if this is necessary, but it's o3's idea
+                raise
+
+            if should_pop and len(self._list) > 0:
+                popped_item = self._list.pop(0)
+                # Notify potential producers waiting on full() condition.
+                self._condition.notify()
+
+            snapshot_after: List[Any] = list(self._list)
+
+            return snapshot_after, popped_item
 
 
 def _init_worker(
@@ -226,6 +294,7 @@ class Pipeline(BasePipeline):
         parameters: Optional[Dict[Any, Dict[str, Any]]] = None,
         load_groups: Optional["LoadGroups"] = None,
         use_cache: bool = True,
+        invalidate_distiset: bool = False,
         storage_parameters: Optional[Dict[str, Any]] = None,
         use_fs_to_pass_data: bool = False,
         dataset: Optional["InputDataset"] = None,
@@ -247,6 +316,8 @@ class Pipeline(BasePipeline):
                 Defaults to `None`.
             use_cache: Whether to use the cache from previous pipeline runs. Defaults to
                 `True`.
+            invalidate_distiset: Whether to invalidate the distiset cache. Defaults to
+                `False`.
             storage_parameters: A dictionary with the storage parameters (`fsspec` and path)
                 that will be used to store the data of the `_Batch`es passed between the
                 steps if `use_fs_to_pass_data` is `True` (for the batches received by a
@@ -290,6 +361,7 @@ class Pipeline(BasePipeline):
             parameters=parameters,
             load_groups=load_groups,
             use_cache=use_cache,
+            invalidate_distiset=invalidate_distiset,
             storage_parameters=storage_parameters,
             use_fs_to_pass_data=use_fs_to_pass_data,
             dataset=dataset,

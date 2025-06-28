@@ -21,6 +21,7 @@ from distilabel import utils
 from distilabel.pydantics import LMConfig, Stage
 from distilabel.prompt_sampler import PromptSampler
 from distilabel.constants import STRUCTURED_OUTPUT_RETRIES
+from .lm_cache import get_lm_cache
 
 class VLM:
     stage: Stage = Field(default_factory=Stage, exclude=True)
@@ -79,14 +80,15 @@ def lm_cache(agenerate: Callable) -> Callable:
     '''
     Decorator for agenerate methods to handle caching of input -> output.
     
+    Uses a SQLite database for efficient storage instead of individual JSON files.
     Maps all input parameters to a GenerateOutput object using a hash-based cache.
-    The cache is stored in self.pipeline._cache_location['lm_cache'] as JSON files.
+    The cache is stored in self.pipeline._cache_location['lm_cache'] as a SQLite database.
     
     Behavior:
     - Does not read/write cache if self.use_cache is False
     - Overwrites cache (without reading) if self.invalidate_cache is True
     - Creates cache directory if it doesn't exist
-    - Uses JSON for safe serialization of GenerateOutput objects
+    - Uses SQLite for efficient storage and fast updates
     
     This decorator should be applied before other decorators that modify the function signature.
     
@@ -124,28 +126,18 @@ def lm_cache(agenerate: Callable) -> Callable:
             'model_name': getattr(self, 'model_name', 'unknown'),
         }
         
-        # Get cache directory
+        # Get cache instance
         cache_dir = self.lm_config.lm_response_cache_root
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        
-        cache_key = cache_dir / f"{utils.hash_structure_with_images(cache_params)}.json"
+        lm_cache_db = get_lm_cache(cache_dir)
         
         # Check if we should read from cache
-        should_read_cache = (
-            not getattr(self, 'invalidate_cache', False) and 
-            cache_key.exists()
-        )
+        should_read_cache = not getattr(self, 'invalidate_cache', False)
         
         if should_read_cache:
-            try:
-                cached_response = utils.load_json(cache_key)
+            cached_response = lm_cache_db.get(cache_params)
+            if cached_response is not None:
                 self._logger.info(f"🔍 Cache hit for LM {self.lm_config.path}")
                 return cached_response
-            except Exception as e:
-                # If cache read fails, proceed with generation
-                # Log the error but don't fail the entire operation
-                if hasattr(self, '_logger'):
-                    self._logger.warning(f"Failed to read cache file {cache_key}: {e}")
         
         # Generate new result
         result = await agenerate(
@@ -158,12 +150,7 @@ def lm_cache(agenerate: Callable) -> Callable:
         )
         
         # Save to cache
-        try:
-            utils.save_json(cache_key, result)
-        except Exception as e:
-            # If cache write fails, just log the error but don't fail the operation
-            if hasattr(self, '_logger'):
-                self._logger.warning(f"Failed to write cache file {cache_key}: {e}")
+        lm_cache_db.set(cache_params, result)
         
         return result
     
@@ -289,7 +276,7 @@ class OpenAILM(OpenAILLM, CudaDevicePlacementMixin, VLM):
             self._vllm_api = vLLMAPI(self.lm_config)
             self.base_url = f'http://localhost:{self._vllm_api.port}/v1'
             if self.debug_with_running_vllm:
-                self.base_url = 'http://localhost:32166/v1'
+                self.base_url = 'http://localhost:8000/v1'
 
         # must come after the base_url is set properly
         super().load()

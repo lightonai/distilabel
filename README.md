@@ -163,7 +163,6 @@ To directly contribute with `distilabel`, check our [good first issues](https://
 - Better parallelism by handling it with just a config and allowing pretty arbitrary gpu usage via tensor parallelism, replicas and available_gpus. data_gen only has the data parallelism wrapper I made which has no tensor parallelism support and requires sharding the chunks json manually before and after.
 - Input and output in huggingface datasets rather than using the chunking library with its custom format and taking/outputting jsons.
 - Built in and hidden caching for easy resuming
-- According to the documentation, works with Ray for larger scale distributed generation.
 - Inherits some cool things from distilabel such as the premade EvolInstructGenerator Task and [others](https://distilabel.argilla.io/latest/components-gallery/tasks/?h=task+gal).
 - Slightly improved prompt sampler by making it part of the config (easier to edit and have multiple of) and adding the ability to generate list fields in an API call (say generate 4 questions instead of 1 and split these into separate rows)
 
@@ -181,6 +180,7 @@ To directly contribute with `distilabel`, check our [good first issues](https://
 - It will launch a vllm server if the model name is not a recognized proprietary model.
 - Stages in the config and load stages in distilabel are different concepts. Stages in the config are broken into maybe multiple load stages/groups in distilabel so that I can handle scheduling arbitrary amounts of models into different load stages in the pipeline.
 - I added a timeout to the output batch loop (set in `constants.py`), if it doesn't receive an output batch within that timeframe, it will break and finalize the pipeline execution. Hanging issues are easy to run into so this just closes it in a controlled manner.
+- The Ray pipeline is out of date and not supported, though it would not be terribly difficult to update by comparing with the local pipeline.
 - Convergence steps (those that come after steps that are routed to (route steps)) will act like global steps (waiting for all batches to be received before continuing). This is due to issues with properly maintaining order of batches.
 - I don't believe order of branches in `def process(self, *inputs: StepInput) -> "StepOutput":` is guaranteed. 
 - Don't connect a global step to a routing batch function, a global step must take and output all current rows, so that will all get routed together. Connect it to a `NoOp` to break it up.

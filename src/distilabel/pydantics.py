@@ -149,5 +149,6 @@ class SatisfactoryAnswer(BaseModel):
             self.question_fully_answered = True
         return self
 
-class ReferencePage(BaseModel):
+class Metalabel(BaseModel):
     is_references_page: bool
+    word_count: int
