@@ -184,7 +184,6 @@ To directly contribute with `distilabel`, check our [good first issues](https://
 - Convergence steps (those that come after steps that are routed to (route steps)) will act like global steps (waiting for all batches to be received before continuing). This is due to issues with properly maintaining order of batches.
 - I don't believe order of branches in `def process(self, *inputs: StepInput) -> "StepOutput":` is guaranteed. 
 - Don't connect a global step to a routing batch function, a global step must take and output all current rows, so that will all get routed together. Connect it to a `NoOp` to break it up.
-- **Important** I can't make guarantees about the caching system at the moment. Your batches are technically being saved in jsons as they go, so the data exists, but distilabel might not resume the pipeline without hanging.
 - I have implemented a batch level caching system.
   - The cache key is dependent on only the data in the batch (order included) and the name of the class of step it is being sent to. 
   - This works pretty well but is sensitive to the elements in the batch, which is influenced by batch size 
