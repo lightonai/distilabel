@@ -415,6 +415,17 @@ class Task(_Task, Step):
             a list or create a row per generation. Defaults to `False`.
         num_generations: The number of generations to be produced per input.
     """
+    def can_parallel_format_inputs(self) -> bool:
+        """Whether the task can parallel format inputs."""
+        return False
+
+    @abstractmethod
+    def parallel_format_inputs(self, inputs: list[dict]) -> list['ChatType']:
+        """Parallel format the inputs of the task.
+        
+        Return a list of formatted inputs.
+        """
+        pass
 
     @abstractmethod
     def format_input(self, input: Dict[str, Any]) -> "FormattedInput":
@@ -432,6 +443,8 @@ class Task(_Task, Step):
             A list containing the formatted inputs, which are `ChatType`-like following
             the OpenAI formatting.
         """
+        if self.can_parallel_format_inputs():
+            return self.parallel_format_inputs(inputs)
         return [self.format_input(input) for input in inputs]
 
     def process(self, inputs: StepInput) -> "StepOutput":  # type: ignore

@@ -6,6 +6,7 @@ from datasets import load_from_disk, Dataset
 from distilabel.steps import (
     StepResources, 
     LoadDataFromDicts,
+    LoadDataFromDataset,
     FilterRows,
     ListToRows,
     Split,
@@ -55,7 +56,7 @@ def run_pipeline(config: Config):
     aps = [row for row in dataset if row['split'] == 'adjacent_pages_short']
     hns = utils.randomize_source_order(hns)
     aps = utils.sort_adjacent_pages(aps)
-    dataset = (hns + aps)
+    dataset = Dataset.from_list(hns + aps)
 
     with Pipeline(
         name='true_multi_page_qa',
@@ -67,7 +68,7 @@ def run_pipeline(config: Config):
     ) as pipeline:
         ################## STAGE 0: INITIAL QUESTIONS ##################
         stage = stages[STAGE]
-        load_data = LoadDataFromDicts(name="load_data", data=dataset, batch_size=64)  # cols: ['source', ...]
+        load_data = LoadDataFromDataset(name="load_data", dataset=dataset, batch_size=64)  # cols: ['source', ...]
         
         data_router = pipe_utils.data_router(
             step_distribution=[lm_config.data_ratio for lm_config in stage.lm_configs]

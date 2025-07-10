@@ -29,6 +29,7 @@ RECEIVES_ROUTED_BATCHES_ATTR_NAME: Final[str] = "receives_routed_batches"
 ROUTING_BATCH_FUNCTION_ATTR_NAME: Final[str] = "routing_batch_function"
 CONVERGENCE_STEP_ATTR_NAME: Final[str] = "convergence_step"
 LAST_BATCH_SENT_FLAG: Final[str] = "last_batch_sent"
+IS_GENERATOR_ATTR_NAME: Final[str] = "is_generator"
 
 # Pipeline execution related constants
 PIPELINE_NAME_ENV_NAME = "DISTILABEL_PIPELINE_NAME"
@@ -51,6 +52,7 @@ DISTILABEL_DOCS_URL: Final[str] = "https://distilabel.argilla.io/latest/"
 OUTPUT_QUEUE_TIMEOUT: Final[int] = 2000
 LAST_BATCH_ROUTED_FLAG: Final[str] = "last_batch_routed"
 STRUCTURED_OUTPUT_RETRIES = 2
+INPUT_QUEUE_LOAD_LEVEL: Final[int] = 128
 
 
 __all__ = [

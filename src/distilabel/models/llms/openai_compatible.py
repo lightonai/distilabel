@@ -22,6 +22,43 @@ from distilabel.pydantics import LMConfig, Stage
 from distilabel.prompt_sampler import PromptSampler
 from distilabel.constants import STRUCTURED_OUTPUT_RETRIES
 from .lm_cache import get_lm_cache
+from concurrent.futures import ProcessPoolExecutor
+from multiprocessing import cpu_count
+
+def _format_one_input(args) -> 'ChatType':
+    (
+        input,
+        system_prompt,
+        lm_input_cols,
+        lm_input_col_prefixes,
+        max_dims,
+        msg_content_img_func,
+        logger,
+    ) = args
+    messages = [{'role': 'system', 'content': system_prompt}]
+
+    if not all(input.get(col) is not None for col in lm_input_cols + ['source']):
+        # some assurance that the values we want to use exist in input
+        # generation will be skipped in LMGenerationTask for this kind of input
+        logger.warning(
+            f"Skipping generation because some required columns are missing from {lm_input_cols + ['source']}\n"
+            f"Input: {input}"
+        )
+        return [{'role': 'system', 'content': ''}]
+
+    messages.append(utils.source_to_msg(input['source'], max_dims, msg_content_img_func))
+    
+    if len(lm_input_col_prefixes) == 0:
+        lm_input_col_prefixes = [''] * len(lm_input_cols)
+    for col, prefix in zip(lm_input_cols, lm_input_col_prefixes):
+        message = utils.source_to_msg(input[col], max_dims, msg_content_img_func)
+        if isinstance(message['content'], str):
+            message['content'] = prefix + message['content']
+        else:
+            messages.append({'role': 'user', 'content': prefix})
+        messages.append(message)
+    
+    return messages
 
 class VLM:
     stage: Stage = Field(default_factory=Stage, exclude=True)
@@ -30,51 +67,59 @@ class VLM:
     debug_with_running_vllm: bool = Field(default=False, exclude=True)
 
     _vlm_logger = logging.getLogger(f"distilabel.vlm")
+    _executor: "ProcessPoolExecutor | None" = PrivateAttr(default=None)
 
     def _format_input(self, input: dict, lm_input_cols: list[str], lm_input_col_prefixes: list[str]) -> 'ChatType':
-        '''
-        takes raw dictionary row from dataset and samples a system prompt + formats in messages
+        system = self.prompt_sampler.generate_prompt()
+        input |= {'system': system}  # inplace update the input to sneak it into the format_output of LMGenerationTask
+        return _format_one_input((
+            input,
+            system,
+            lm_input_cols,
+            lm_input_col_prefixes,
+            self.stage.max_dims,
+            VLM.msg_content_img,
+            self._vlm_logger,
+        ))
 
-        Also takes extra columns to include in the messages, 
-        postfixed in order and prefixed with the lm_input_col_prefixes
-            e.g. a prefix can say: 'answer: ' before the answer col to indicate to the 
-            lm what the col is
+    def parallel_format_inputs(self, inputs: list[dict], lm_input_cols: list[str], lm_input_col_prefixes: list[str]) -> list['ChatType']:
         '''
-        messages = [{'role': 'system', 'content': self.prompt_sampler.generate_prompt()}]
-        # inplace update the input to sneak it into the format_output of LMGenerationTask
-        input |= {'system': messages[0]['content']}
-
-        if not all(input.get(col) is not None for col in lm_input_cols + ['source']):
-            # some assurance that the values we want to use exist in input
-            # generation will be skipped in LMGenerationTask for this kind of input
-            self._vlm_logger.warning(
-                f"Skipping generation because some required columns are missing from {lm_input_cols + ['source']}\n"
-                f"Input: {input}"
+        Format input serially is a big bottleneck due probably to image loading. Parallelizing this is great for throughput.
+        '''
+        prompts = [self.prompt_sampler.generate_prompt() for _ in inputs]
+        for inp, system in zip(inputs, prompts):
+            inp |= {'system': system}  # inplace update the input to sneak it into the format_output of LMGenerationTask
+        
+        tasks = [
+            (
+                input_data,
+                system_prompt,
+                lm_input_cols,
+                lm_input_col_prefixes,
+                self.stage.max_dims,
+                VLM.msg_content_img,
+                self._vlm_logger
             )
-            return [{'role': 'system', 'content': ''}]
+            for input_data, system_prompt in zip(inputs, prompts)
+        ]
         
-        # Handle source content
-        messages.append(utils.source_to_msg(input['source'], self.stage.max_dims, self.msg_content_img))
-        
-        # Handle extra columns
-        if len(lm_input_col_prefixes) == 0:
-            lm_input_col_prefixes = [''] * len(lm_input_cols)
-        for col, prefix in zip(lm_input_cols, lm_input_col_prefixes):
-            message = utils.source_to_msg(input[col], self.stage.max_dims, self.msg_content_img)
-            if isinstance(message['content'], str):
-                message['content'] = prefix + message['content']
-            else:
-                messages.append({'role': 'user', 'content': prefix})
-            messages.append(message)
-        
-        return messages
+        if self._executor is None:
+            raise DistilabelError("ProcessPoolExecutor not initialized. Make sure to call `load()`.")
+
+        return list(self._executor.map(_format_one_input, tasks))
 
     def load(self):
         self.prompt_sampler = PromptSampler(self.lm_config.prompt_sampler_config, self.lm_config.system_template)
+        self._executor = ProcessPoolExecutor(max_workers=min(max(4, cpu_count()), 32))
     
-    def msg_content_img(self, b64_img):
+    def unload(self):
+        if self._executor is not None:
+            self._executor.shutdown(wait=True)
+
+    @staticmethod
+    def msg_content_img(b64_img):
         """Convert base64 image to appropriate format. To be implemented by subclasses."""
-        raise NotImplementedError("Subclasses must implement msg_content_img")
+        return utils.msg_content_img_url(b64_img)
 
 def lm_cache(agenerate: Callable) -> Callable:
     '''
@@ -136,7 +181,7 @@ def lm_cache(agenerate: Callable) -> Callable:
         if should_read_cache:
             cached_response = lm_cache_db.get(cache_params)
             if cached_response is not None:
-                self._logger.info(f"🔍 Cache hit for LM {self.lm_config.path}")
+                self._logger.debug(f"🔍 Cache hit for LM {self.lm_config.path}")
                 return cached_response
         
         # Generate new result
@@ -296,7 +341,8 @@ class OpenAILM(OpenAILLM, CudaDevicePlacementMixin, VLM):
         self._available_cuda_devices = self.stage.available_gpus
         super()._assign_cuda_devices()
 
-    def msg_content_img(self, b64_img):
+    @staticmethod
+    def msg_content_img(b64_img):
         return utils.msg_content_img_url(b64_img)
 
     @lm_cache
@@ -349,3 +395,4 @@ class OpenAILM(OpenAILLM, CudaDevicePlacementMixin, VLM):
             self._vllm_api.cleanup()
         super().unload()
         CudaDevicePlacementMixin.unload(self)
+        VLM.unload(self)

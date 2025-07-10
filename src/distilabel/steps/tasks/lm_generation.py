@@ -30,6 +30,7 @@ class LMGenerationTask(Task):
     lm_input_cols: list[str] = []
     lm_input_col_prefixes: list[str] = []
     input_formatter: Callable = Field(default=lambda **kwargs: kwargs, exclude=True)
+    parallel_input_formatter: Callable | None = Field(default=None, exclude=True)
     extra_cols: list[str] = []
     use_cache: bool = True  # this affects the batch level caching, not the lm level caching
 
@@ -65,6 +66,12 @@ class LMGenerationTask(Task):
 
     def format_input(self, input: dict) -> 'ChatType':
         return self.input_formatter(input, self.lm_input_cols, self.lm_input_col_prefixes)
+
+    def can_parallel_format_inputs(self) -> bool:
+        return self.parallel_input_formatter is not None
+
+    def parallel_format_inputs(self, inputs: list[dict]) -> list['ChatType']:
+        return self.parallel_input_formatter(inputs, self.lm_input_cols, self.lm_input_col_prefixes)
 
     def format_output(self, output: str | None, input: dict) -> dict:
         pydantic_output = {'generation': output}

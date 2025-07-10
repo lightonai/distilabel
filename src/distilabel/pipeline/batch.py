@@ -23,10 +23,12 @@ import pyarrow.parquet as pq
 from upath import UPath
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
-from distilabel.utils import save_json, load_json
+from distilabel.utils import get_timer
 from distilabel.mixins.signature import SignatureMixin
 from distilabel.utils.serialization import _Serializable
+from .routed_to_cache import get_routed_to_cache_db
 
+_timer = get_timer()
 
 class _Batch(_Serializable, SignatureMixin):
     """Pydantic model to represent a batch of data to be processed by a `_Step`.
@@ -58,11 +60,13 @@ class _Batch(_Serializable, SignatureMixin):
     created_from: Dict[str, List[Tuple[int, int, int]]] = Field(default_factory=dict)
     batch_routed_to: List[str] = Field(default_factory=list)
     size: int = 0
+    _num_rows_fs: int | None = PrivateAttr(default=None)
     _fs: Optional[fsspec.AbstractFileSystem] = PrivateAttr(default=None)
 
     def model_post_init(self, context) -> None:
         # want the signature to only depend on data
         self.exclude_from_signature.union(set(_Batch.model_fields.keys()) - {'data'})
+        # self.exclude_from_signature = (set(_Batch.model_fields.keys()) | {'type_info'}) - {'data'}
 
     def next_batch(self) -> "_Batch":
         """Create a new `_Batch` instance with the next batch of data.
@@ -91,6 +95,9 @@ class _Batch(_Serializable, SignatureMixin):
         """Takes `num_rows` from the data of the batch and returns it. This method will
         also remove the data from the batch and update the hash of the data.
 
+        If the batch is on fs, it will read the data from fs and write back if any rows are remaining.
+        num_rows() will be updated.
+
         Args:
             num_rows: The number of rows to take from the data. If `None`, then all the
                 data will be taken. Defaults to `None`.
@@ -105,6 +112,9 @@ class _Batch(_Serializable, SignatureMixin):
         if self.num_rows() == 0:
             return []
 
+        if self.data_path and self._fs:
+            self.read_batch_data_from_fs()
+
         if num_rows is None:
             data = self.data[0]
             self.data = []
@@ -114,10 +124,16 @@ class _Batch(_Serializable, SignatureMixin):
 
         # self.size = len(self.data[0])
         self._update_data_hash()
+
+        if self.num_rows() != 0:
+            self.write_batch_data_to_fs()
+        
         return data
 
     def num_rows(self) -> int:
         """Returns the number of rows in the batch."""
+        if self._num_rows_fs is not None:
+            return self._num_rows_fs
         return sum(len(d) for d in self.data)
 
     def _update_data_hash(self) -> None:
@@ -226,6 +242,7 @@ class _Batch(_Serializable, SignatureMixin):
             with self._fs.open(seq_no_dir / f"data_index_{i}.parquet", "wb") as f:  # type: ignore
                 pq.write_table(table, f)
 
+        self._num_rows_fs = self.num_rows()
         self.data = []
         self.data_path = str(seq_no_dir)
 
@@ -249,21 +266,23 @@ class _Batch(_Serializable, SignatureMixin):
                 self.data.append(table.to_pylist())
 
         self._fs.rm(self.data_path, recursive=True)
+        self._num_rows_fs = None
 
     def routed_to_cached(self, cache_root: Path) -> bool:
         """Check if the batch is cached in the given cache_root."""
-        return (cache_root / 'routed_to' / f'{self.signature}.json').exists()
+        cache_db = get_routed_to_cache_db(cache_root)
+        return cache_db.exists(self.signature)
 
     def cache_routed_to(self, cache_root: Path) -> None:
         """Cache the field batch_routed_to in the given cache_root."""
-        path = cache_root / 'routed_to' / f'{self.signature}.json'
-        save_json(path, self.batch_routed_to)
+        cache_db = get_routed_to_cache_db(cache_root)
+        cache_db.set(self.signature, self.batch_routed_to)
 
     def load_routed_to(self, cache_root: Path) -> None:
         """Load the field batch_routed_to from cache."""
-        path = cache_root / 'routed_to' / f'{self.signature}.json'
-        if self.routed_to_cached(cache_root):
-            self.batch_routed_to = load_json(path)
+        cache_db = get_routed_to_cache_db(cache_root)
+        if cache_db.exists(self.signature):
+            self.batch_routed_to = cache_db.get(self.signature)
 
     @classmethod
     def cached(cls, path: Path) -> bool:

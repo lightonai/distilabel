@@ -34,6 +34,7 @@ import requests
 
 from distilabel.constants import (
     CONVERGENCE_STEP_ATTR_NAME,
+    IS_GENERATOR_ATTR_NAME,
     RECEIVES_ROUTED_BATCHES_ATTR_NAME,
     ROUTING_BATCH_FUNCTION_ATTR_NAME,
     STEP_ATTR_NAME,
@@ -265,7 +266,7 @@ class DAG(_Serializable):
             True if it is, False otherwise.
         """
         predecessors = list(self.get_step_predecessors(step_name))
-        return all(
+        return len(predecessors) > 0 and all(
             self.is_route_step(predecessor)
             for predecessor in predecessors
         )
@@ -291,6 +292,15 @@ class DAG(_Serializable):
             True if the step is a routing step, False otherwise.
         """
         return self.get_step(step_name).get(ROUTING_BATCH_FUNCTION_ATTR_NAME, None) is not None
+
+    def predecessor_is_generator(self, step_name: str) -> bool:
+        """Checks if the predecessor of a step is a generator step.
+        """
+        predecessors = list(self.get_step_predecessors(step_name))
+        return any(
+            self.get_step(predecessor)[STEP_ATTR_NAME].is_generator
+            for predecessor in predecessors
+        )
 
     def step_in_last_trophic_level(self, step_name: str) -> bool:
         """Checks if a step is in the last trophic level.

@@ -57,6 +57,9 @@ from .misc import (
     logical_or_filters,
 )
 
+# Timer
+from .timer import get_timer
+
 __all__ = [
     # Image utilities
     "image_to_str",
@@ -98,4 +101,6 @@ __all__ = [
     "logical_not_filter",
     "logical_and_filters",
     "logical_or_filters",
+    # Timer
+    "get_timer",
 ]

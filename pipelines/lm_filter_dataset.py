@@ -6,7 +6,7 @@ from datasets import load_from_disk, Dataset
 from distilabel.steps import (
     StepResources, 
     LoadDataFromDicts,
-    LoadPydanticAsColumns,
+    LoadDataFromDataset,
     FilterRows,
     ListToRows,
 )
@@ -35,22 +35,24 @@ def run_pipeline(config: Config):
     
     stages = config.stages
     dataset = load_from_disk('/mnt/nfs/dse/scraped_v0.3_with_txt_img_neg')
-    dataset = dataset.select(range(50000))
-    dataset = list(dataset.remove_columns([col for col in dataset.column_names if col != 'image_filename']))
-    dataset = [{'source': [row['image_filename']]} for row in dataset]
+    # dataset = dataset.select(range(16000))
+    dataset = dataset.remove_columns([col for col in dataset.column_names if col != 'image_filename'])
+    dataset = dataset.rename_column('image_filename', 'source')
+    dataset = dataset.map(lambda x: {'source': [x['source']]}, num_proc=16)
 
     with Pipeline(
         name="remove_reference_pages",
         description="Use a LM to find reference/bibliography pages in the scraped data and remove them.",
-        cache_dir='out/remove_references_debug',
+        cache_dir='out/remove_references',
+
     ) as pipeline:
         ################## STAGE 0 ##################
         stage = stages[STAGE]
-        load_data = LoadDataFromDicts(name="load_data", data=dataset, batch_size=256)  # cols: ['source', 'question', ...]
+        load_data = LoadDataFromDataset(name="load_data", dataset=dataset, batch_size=256)  # cols: ['source', 'question', ...]
         data_router = pipe_utils.data_router(
             step_distribution=[lm_config.data_ratio for lm_config in stage.lm_configs]
         )
-        lms = pipe_utils.make_lms(config, stage)  # use_cache=False  # turn off lm level caching
+        lms = pipe_utils.make_lms(config, stage, use_cache=False)  # use_cache=False  # turn off lm level caching
         label_references = [
             LMGenerationTask(
                 name=f"label_references_{i}",
@@ -58,6 +60,7 @@ def run_pipeline(config: Config):
                 llm=lm,
                 lm_config=lm.lm_config,
                 input_formatter=lm._format_input,
+                parallel_input_formatter=lm.parallel_format_inputs,
                 input_batch_size=256,
                 resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.tp_size),
                 output_mappings={'system': 'references_system', 'model_name': 'references_model_name'},
@@ -91,6 +94,7 @@ def run_pipeline(config: Config):
         ),
         # use_cache=False,  # turn off distiset level caching
         invalidate_distiset=True,
+        use_fs_to_pass_data=False,  # will keep data not being actively read/modified in the fsspec fs (which can be local disk or others)
     )
     return distiset
 

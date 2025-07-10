@@ -19,6 +19,7 @@ from PIL import Image
 from datasets import Dataset
 from pathlib import Path as pth
 import traceback as tb
+import pypdfium2 as pdfium
 
 from typing import TYPE_CHECKING
 
@@ -32,19 +33,61 @@ def image_to_str(image: "Image.Image", image_format: str = "JPEG") -> str:
     image.save(buffered, format=image_format)
     return base64.b64encode(buffered.getvalue()).decode("utf-8")
 
-def load_from_pdf(filename: str | pth):
-    '''
-    Args:
-        filename (str):
-            e.g. '/mnt/nfs/pdfs/pdfs_train/.../name_page_xxx.pdf'
-    '''
-    filename = str(filename)
-    page = int(filename[filename.rfind("page_") + 5:filename.rfind(".pdf")])
-    path = filename[:filename.rfind("_page_")] + ".pdf"
+def _render_image_with_pdfium(
+    page: pdfium.PdfPage,
+    max_resolution: int = 1280,
+    scale: float = 2.77,
+) -> Image:
+    """Render a PDF page to a PIL Image using pdfium.
 
-    pages = convert_from_path(path, first_page=page+1, last_page=page+1)
-    page = pages[0]
-    return page
+    Args:
+    ----
+        page: The PDF page object to render.
+        max_resolution: The maximum resolution for the rendered image. Defaults to 1280.
+        scale: The scale factor to apply to the rendering. Defaults to 2.77 (≈200 DPI).
+
+    """
+    width, height = page.get_size()
+
+    # if scale=2.77 (≈200 DPI), this gives the size at 200 DPI
+    pixel_width = width * scale
+    pixel_height = height * scale
+
+    # calculate the scaling factor
+    resize_factor = min(max_resolution / pixel_width, max_resolution / pixel_height)
+
+    # apply this factor to the original scale
+    target_scale = scale * resize_factor
+
+    # render directly at the calculated target scale
+    return page.render(scale=target_scale, rev_byteorder=True).to_pil()
+
+def load_from_pdf(filename: str | pth, pdf_backend: str = "pdfium") -> Image.Image:
+    """Take a pdf "filename" w/ page and load that page into a PIL.Image.
+
+    Args:
+    ----
+        filename:
+            e.g. '/mnt/nfs/pdfs/pdfs_train/.../name_page_xxx.pdf'
+        pdf_backend:
+            "pdf2image" (default) or "pdfium"
+
+    """
+    filename = str(filename)
+    page = int(filename[filename.rfind("page_") + 5 : filename.rfind(".pdf")])
+    path = filename[: filename.rfind("_page_")] + ".pdf"
+
+    if pdf_backend == "pdf2image":
+        pages = convert_from_path(path, first_page=page + 1, last_page=page + 1)
+        return pages[0]
+    if pdf_backend == "pdfium":
+        pdf = pdfium.PdfDocument(path)
+        page_obj = pdf[page]  # pdfium uses 0-based indexing
+        image = _render_image_with_pdfium(page_obj)
+        pdf.close()
+        return image
+    message = "Invalid pdf_backend. Choose 'pdf2image' or 'pdfium'."
+    raise ValueError(message)
 
 def load_from_filename(filename: str):
     """
@@ -63,7 +106,6 @@ def load_from_filename(filename: str):
         return load_from_pdf(filename)
     else:
         raise NotImplementedError(f'suffix for {filename=} is not supported')
-
 
 def get_image(ds: Dataset | None, image_ptr: str | int):
     '''

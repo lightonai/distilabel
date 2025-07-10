@@ -210,7 +210,6 @@ class _StepWrapper:
                 f"🚰 Starting yielding batches from generator step '{self.step.name}'."
                 f" Offset: {offset}"
             )
-
             for data, last_batch in step.process_applying_mappings(offset=offset):
                 batch.set_data([data])
                 batch.last_batch = self.dry_run or last_batch
@@ -237,7 +236,6 @@ class _StepWrapper:
         """
         step = cast("Step", self.step)
         step._logger.info(f"✨ Starting process loop for step '{step.name}'...")
-
         while True:
             if self.is_route_step:
                 while True:
@@ -246,9 +244,9 @@ class _StepWrapper:
                     # ensure that we can determine if the current batch is the actual
                     # last batch for this specific route, as the main `last_batch` flag
                     # from the predecessor might go to a different route.
-                    pop_if = lambda q_contents: (
-                        len([b for b in q_contents if b not in [LAST_BATCH_SENT_FLAG, None]]) >= 2
-                        or LAST_BATCH_SENT_FLAG in q_contents
+                    pop_if = lambda q_contents_: (
+                        len([b for b in q_contents_ if b not in [LAST_BATCH_SENT_FLAG, None]]) >= 2
+                        or LAST_BATCH_SENT_FLAG in q_contents_
                     )
                     q_contents, batch = self.input_queue.items(pop_if=pop_if)
                     if batch is not None:
@@ -264,6 +262,10 @@ class _StepWrapper:
                 )
                 break
 
+            if isinstance(batch, _Batch) and batch.data_path is not None:
+                self.step._logger.debug(f"Reading batch data from '{batch.data_path}'")
+                batch.read_batch_data_from_fs()
+
             # get the cache key before any modifications to the received batch
             # so that we can correctly map the sent batch to the response
             cache_key = self.cache_key(batch) if isinstance(batch, _Batch) else Path('none')
@@ -278,7 +280,7 @@ class _StepWrapper:
                 and all(b in [LAST_BATCH_SENT_FLAG, None] for b in q_contents)
             ):
                 batch.route_step_last_batch = True # type: ignore
-            
+
             # handle cache hit
             # but we want route_step_last_batch logic to be handled normally
             # so it comes after that
@@ -299,18 +301,13 @@ class _StepWrapper:
                 self.step._logger.debug("Received `LAST_BATCH_SENT_FLAG`. Stopping...")
                 break
 
+            self.step._logger.info(
+                f"📦 Processing batch {batch.seq_no} in '{batch.step_name}' (replica ID: {self.replica})"
+            )
             # lazy loading of the step, if we end up with all cache hits,
             # we don't need to load the step
             if not self._loaded:
                 self.load_step()
-
-            self.step._logger.info(
-                f"📦 Processing batch {batch.seq_no} in '{batch.step_name}' (replica ID: {self.replica})"
-            )
-
-            if batch.data_path is not None:
-                self.step._logger.debug(f"Reading batch data from '{batch.data_path}'")
-                batch.read_batch_data_from_fs()
 
             result = []
             try:

@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import warnings
+import math
 from collections import defaultdict
 from functools import cached_property
 from pathlib import Path
@@ -612,3 +613,20 @@ class LoadDataFromDisk(LoadDataFromHub):
             self.load()
 
         return self._dataset.column_names
+
+
+class LoadDataFromDataset(GeneratorStep):
+    dataset: Union[IterableDataset, Dataset, None] = Field(default=None, exclude=True)
+
+    def process(self, offset: int = 0) -> "GeneratorStepOutput":
+        while True:
+            batch = list(self.dataset.select(range(offset, min(offset + self.batch_size, len(self.dataset)))))
+            yield batch, offset + self.batch_size >= len(self.dataset)
+            offset += self.batch_size
+            if offset >= len(self.dataset):
+                break
+
+    @property
+    def outputs(self) -> "StepColumns":
+        return self.dataset.column_names
+

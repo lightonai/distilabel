@@ -17,6 +17,7 @@ import os
 import shutil
 import signal
 import threading
+from collections import defaultdict
 from multiprocessing.synchronize import Lock
 import time
 from abc import ABC, abstractmethod
@@ -63,6 +64,7 @@ from distilabel.utils.typing_ import (
 )
 from distilabel.utils import save_jsonl, load_jsonl
 from distilabel.models.llms import get_lm_cache
+from distilabel.utils import get_timer
 if TYPE_CHECKING:
     from os import PathLike
     from queue import Queue
@@ -144,6 +146,9 @@ _STEP_UNLOADED_CODE = -1000
 _PIPELINE_DEFAULT_NAME = "__default_pipeline_name__"
 
 
+_timer = get_timer()
+
+
 class BasePipeline(ABC, RequirementsMixin, _Serializable):
     """Base class for a `distilabel` pipeline.
 
@@ -220,6 +225,10 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
 
         self._logger = logging.getLogger("distilabel.pipeline")
 
+        self._timer = _timer
+        if os.environ.get("DISTILABEL_ENABLE_TIMER", "0") == "1":
+            self._timer.enable()
+
         self._batch_manager: Optional["_BatchManager"] = None
         self._write_buffer: Optional["_WriteBuffer"] = None
         self._steps_input_queues: Dict[str, "Queue"] = {}
@@ -252,13 +261,20 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
 
         self._log_queue: Union["Queue[Any]", None] = None
 
+        self._generator_sent_and_received: Dict[str, Tuple[int, int]] = defaultdict(lambda: [0, 0])
+        '''tracks number of rows sent from a generator step and the amount of those that have been processed'''
+
         # For logging deltas
+        self.track_batches = (
+            os.environ.get("DISTILABEL_LOG_LEVEL") == "DEBUG"
+            and not self._timer.enabled
+        )
         self._prev_batch_manager_counts: Dict[str, int] = {}
         self._prev_input_queue_counts: Dict[str, int] = {}
         self._prev_output_queue_count: int = 0
         self._prev_total_batch_count: int = 0
         self._received_batches: List["_Batch"] = []
-        self._sent_batches = []
+        self._sent_batches: List["_Batch"] = []
 
     def __enter__(self) -> Self:
         """Set the global pipeline instance when entering a pipeline context."""
@@ -432,6 +448,8 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
                 " Returning `Distiset` from cache data..."
             )
             distiset = Distiset.load_from_disk(self._cache_location["distiset"])
+            if self._timer.enabled:
+                self._logger.info(self._timer.get_summary())
             stop_logging()
             return distiset
 
@@ -464,6 +482,9 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
             Will return the `Distiset` as the main run method would do.
         """
         self._dry_run = True
+
+        if self._timer.enabled:
+            self._timer.reset()
 
         for step_name in self.dag:
             step = self.dag.get_step(step_name)[constants.STEP_ATTR_NAME]
@@ -1007,10 +1028,12 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
                 f" from output queue: {batch}"
             )
 
-            self._received_batches.append(batch.copy())
+            if self.track_batches:
+                self._received_batches.append(batch.copy())
             self._process_batch(batch)
 
-            self._logger.debug(self._detailed_batch_manager_and_queue_state_msg(batch))
+            if self.track_batches:
+                self._logger.debug(self._detailed_batch_manager_and_queue_state_msg(batch))
 
             # If `_stop_called` was set to `True` while waiting for the output queue, then
             # we need to handle the stop of the pipeline and break the loop to avoid
@@ -1088,6 +1111,7 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
 
         return False
 
+    @_timer.time_it
     def _process_batch(self, batch: "_Batch") -> None:
         """Process a batch consumed from the `output_queue`.
 
@@ -1102,6 +1126,11 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
 
         if batch.step_name in self.dag.leaf_steps:
             self._write_buffer.add_batch(batch)  # type: ignore
+
+        for predecessor_name, created_from in batch.created_from.items():
+            if self.dag.get_step(predecessor_name)[constants.STEP_ATTR_NAME].is_generator:
+                # this tracks the number of rows from predecessor_name that were used to create the batch
+                self._generator_sent_and_received[predecessor_name][1] += sum(from_batch[2] for from_batch in created_from)
 
         if batch.last_batch or batch.route_step_last_batch:
             self._register_stages_last_batch(batch.step_name)
@@ -1162,6 +1191,21 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
             data=data,
         )
 
+    @_timer.time_it
+    def _batch_manager_add_fs_batch(self, successor: str, batch: "_Batch") -> None:
+        """Adds a batch to the batch manager.
+        Also writes the batch to fs.
+        
+        Args:
+            batch: The batch to add.
+        """
+        base_path = UPath(self._storage_base_path) / batch.step_name  # type: ignore
+        self._logger.debug(
+            f"Writing {batch.seq_no} batch for '{batch.step_name}' step to filesystem: {base_path}"
+        )
+        batch.write_batch_data_to_fs(self._fs, base_path)  # type: ignore
+        self._batch_manager.add_batch(successor, batch)
+
     def _register_stages_last_batch(self, step_name: str) -> None:
         """Registers the last batch received from a step in the `_stages_last_batch`
         dictionary.
@@ -1175,6 +1219,7 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
             self._stages_last_batch[self._current_stage].append(step_name)
             self._stages_last_batch[self._current_stage].sort()
 
+    @_timer.time_it
     def _update_stage(self) -> bool:
         """Checks if the steps of next stage should be loaded and updates `_current_stage`
         attribute.
@@ -1232,6 +1277,9 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
             self._stop_called = False
 
         self._add_batch_for_recovering_offline_batch_generation()
+
+        if self._timer.enabled:
+            self._logger.info(self._timer.get_summary())
 
     def _run_load_queue_loop_in_thread(self) -> threading.Thread:
         """Runs a background thread that reads from the `load_queue` to update the status
@@ -1319,6 +1367,7 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
             if step_name in steps
         }
 
+    @_timer.time_it
     def _wait_current_stage_to_finish(self) -> None:
         """Waits for the current stage to finish."""
         stage = self._current_stage
@@ -1383,6 +1432,7 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
 
             time.sleep(5)
 
+    @_timer.time_it
     def _handle_stop(self) -> None:
         """Handles the stop of the pipeline execution, which will stop the steps from
         processing more batches and wait for the output queue to be empty, to not lose
@@ -1443,9 +1493,8 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
 
         return False
 
-    @property
     @abstractmethod
-    def QueueClass(self) -> Callable:
+    def QueueClass(self, name: str) -> Callable:
         """The class of the queue to use in the pipeline."""
         pass
 
@@ -1458,7 +1507,7 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
         Returns:
             The input queue created.
         """
-        input_queue = self.QueueClass()
+        input_queue = self.QueueClass(step_name)
         self.dag.set_step_attr(step_name, constants.INPUT_QUEUE_ATTR_NAME, input_queue)
         return input_queue
 
@@ -1553,6 +1602,7 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
             self._process_batch(batch)  # send_last_batch_flag=False
             self._handle_batch_on_stop(batch)
 
+    @_timer.time_it
     def _manage_batch_flow(self, batch: "_Batch") -> None:
         """Checks if the step that generated the batch has more data in its buffer to
         generate a new batch. If there's data, then a new batch is sent to the step. If
@@ -1566,7 +1616,7 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
 
         route_to, do_not_route_to, routed = self._get_successors(batch)
 
-        self._register_batch(batch)
+        self._register_batch(batch)  # type: ignore
 
         # Keep track of the steps that the batch was routed to
         if routed:
@@ -1591,14 +1641,15 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
 
         step = self._get_step_from_batch(batch)
 
-        from copy import deepcopy
-
         # Add the batch to the successors input buffers
         for successor in route_to:
             # Copy batch to avoid modifying the same reference in the batch manager
             batch_to_add = batch.copy() if len(route_to) > 1 else batch
 
-            self._batch_manager.add_batch(successor, batch_to_add)
+            if self._use_fs_to_pass_data:
+                self._batch_manager_add_fs_batch(successor, batch_to_add)
+            else:
+                self._batch_manager.add_batch(successor, batch_to_add)
 
             # Check if the step is a generator and if there are successors that need data
             # from this step. This usually happens when the generator `batch_size` is smaller
@@ -1608,21 +1659,17 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
                 and step.name in self._batch_manager.step_empty_buffers(successor)
             ):
                 last_batch_sent = self._batch_manager.get_last_batch_sent(step.name)
-                b = last_batch_sent.next_batch()
-                self._sent_batches.append(deepcopy(b))
-                self._send_batch_to_step(b)  # type: ignore
+                self._send_batch_to_step(last_batch_sent.next_batch())  # type: ignore
 
             # If successor step has enough data in its buffer to create a new batch, then
             # send the batch to the step.
             while new_batch := self._batch_manager.get_batch(successor):
-                self._sent_batches.append(deepcopy(new_batch))
                 self._send_batch_to_step(new_batch)
 
         if not step.is_generator:
             # Step ("this", the one from which the batch was received) has enough data on its
             # buffers to create a new batch
             while new_batch := self._batch_manager.get_batch(step.name):  # type: ignore
-                self._sent_batches.append(deepcopy(new_batch))
                 self._send_batch_to_step(new_batch)
             else:
                 self._request_more_batches_if_needed(step)
@@ -1638,8 +1685,8 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
             # if not batch.last_batch:
             #     self._request_batch_from_generator(step.name)  # type: ignore
             if not batch.last_batch:
-                for _ in range(32):  # get batches flowing quickly by requesting more than came in
-                    self._request_batch_from_generator(step.name)  # type: ignore
+                # Top-up generator to ensure each successor queue is healthy
+                self._request_batches_from_generator(step.name, successors)
 
         if batch.last_batch:
             self._clear_batch_manager_route_steps(successors)
@@ -1667,14 +1714,17 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
         Args:
             batch: The batch to send.
         """
-        self._sent_batches.append(batch.copy())
+        if self.track_batches:
+            self._sent_batches.append(batch.copy())
         self._logger.debug(
             f"Setting batch {batch.seq_no} as last batch sent to '{batch.step_name}': {batch}"
         )
         self._batch_manager.set_last_batch_sent(batch)  # type: ignore
 
         step: "_Step" = self.dag.get_step(batch.step_name)[constants.STEP_ATTR_NAME]
-        if not step.is_generator and (step.is_global or self._use_fs_to_pass_data):
+        # also write convergence steps to fs, because they act like global steps waiting for all the batches to be received (which can be a lot)
+        is_convergence_step = self.dag.is_convergence_step(batch.step_name)
+        if not step.is_generator and (step.is_global or is_convergence_step or self._use_fs_to_pass_data):
             base_path = UPath(self._storage_base_path) / step.name  # type: ignore
             self._logger.debug(
                 f"Writing {batch.seq_no} batch for '{batch.step_name}' step to filesystem: {base_path}"
@@ -1697,6 +1747,7 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
                     self._register_stages_last_batch(route_step)
                     self._batch_manager.update_not_routed(route_step)
 
+    @_timer.time_it
     def _clear_batch_manager_route_steps(self, successors: List[str]) -> None:
         """Call after route steps have been notified of the last batch.
         This will let any last batches from the batch manager be forwarded 
@@ -1706,9 +1757,11 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
         for step in successors:
             if self.dag.is_route_step(step):
                 while new_batch := self._batch_manager.get_batch(step):
-                    self._sent_batches.append(deepcopy(new_batch))
+                    if self.track_batches:
+                        self._sent_batches.append(deepcopy(new_batch))
                     self._send_batch_to_step(new_batch)
 
+    @_timer.time_it
     def _handle_router_last_batch(self, received_batch: "_Batch") -> None:
         """If a router step has finished its last batch, send LAST_BATCH_FLAG_SENT flags to
         all the successors of the router step (the route steps). Should be called after 
@@ -1745,6 +1798,7 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
 
         return steps_requirements
 
+    @_timer.time_it
     def _register_batch(self, batch: "_Batch") -> None:
         """Registers a batch in the batch manager.
 
@@ -1753,13 +1807,15 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
         """
         assert self._batch_manager, "Batch manager is not set"
         self._batch_manager.register_batch(
-            batch, steps_data_path=self._cache_location["steps_data"]
+            # providing steps_data_path writes the batch.dump() here, does not erase current data, probably for the old caching system
+            batch, # steps_data_path=self._cache_location["steps_data"]  
         )  # type: ignore
         self._logger.debug(
             f"Batch {batch.seq_no} from step '{batch.step_name}' registered in batch"
             " manager"
         )
 
+    @_timer.time_it
     def _send_last_batch_flag_to_step(self, step_name: str) -> None:
         """Sends the `LAST_BATCH_SENT_FLAG` to a step to stop processing batches.
 
@@ -1807,7 +1863,29 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
         if last_batch is None:
             return
         self._send_batch_to_step(last_batch.next_batch())
+        self._generator_sent_and_received[step_name][0] += self.dag.get_step(step_name)[constants.STEP_ATTR_NAME].batch_size
 
+    @_timer.time_it
+    def _request_batches_from_generator(
+        self,
+        step_name: str,
+        successors: List[str],
+    ) -> None:
+        """Request batches from a GeneratorStep based on initial queue sizes and pending output batches."""
+        # I am avoiding checking the queues to lower the overhead of the output batch processing which is a bottleneck
+        sent_rows = self._generator_sent_and_received[step_name][0]
+        received_rows = self._generator_sent_and_received[step_name][1]
+        batch_size = self.dag.get_step(step_name)[constants.STEP_ATTR_NAME].batch_size
+        to_request = max(
+            len(successors) * constants.INPUT_QUEUE_LOAD_LEVEL -
+            ((sent_rows - received_rows) // batch_size),
+            0
+        )
+        # Issue requests
+        for _ in range(to_request):
+            self._request_batch_from_generator(step_name)
+
+    @_timer.time_it
     def _request_more_batches_if_needed(self, step: "Step") -> None:
         """Request more batches to the predecessors steps of `step` if needed.
 
@@ -1824,6 +1902,7 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
 
             self._request_batch_from_generator(previous_step_name)
 
+    @_timer.time_it
     def _handle_batch_on_stop(self, batch: "_Batch") -> None:
         """Handles a batch that was received from the output queue when the pipeline was
         stopped. It will add and register the batch in the batch manager.
@@ -1840,6 +1919,7 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
         for successor in self.dag.get_step_successors(step.name):  # type: ignore
             self._batch_manager.add_batch(successor, batch)
 
+    @_timer.time_it
     def _get_step_from_batch(self, batch: "_Batch") -> "Step":
         """Gets the `Step` instance from a batch.
 
@@ -1860,6 +1940,7 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
                     for _ in range(replicas):
                         self._send_to_step(step_name, None)
 
+    @_timer.time_it
     def _get_successors(self, batch: "_Batch") -> Tuple[List[str], List[str], bool]:
         """Gets the successors and the successors to which the batch has to be routed.
 
@@ -1917,6 +1998,7 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
 
         return route_to, list(set(successors) - set(route_to)), route_to != successors
 
+    @_timer.time_it
     def _set_next_expected_seq_no(
         self, steps: List[str], from_step: str, next_expected_seq_no: int
     ) -> None:
@@ -1941,6 +2023,7 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
                 next_expected_seq_no=next_expected_seq_no,
             )
 
+    @_timer.time_it
     def _set_global_next_seq_no(self, successors: List[str], received_seq_no: int) -> None:
         """Sets a shared next expected sequence number for the successors of a step.
         This tracks the seq_no for which all batches with lower seq_no have been received.
@@ -1948,6 +2031,7 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
         for step in successors:
             self._batch_manager.set_global_next_seq_no(step, received_seq_no)
 
+    @_timer.time_it
     def _notify_route_steps_of_last_batch(self, successors: List[str]) -> None:
         """Notifies the route steps in the batch manager that the last batch has been received."""
         for step in successors:
@@ -1999,6 +2083,7 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
 
         return signal.signal(signal.SIGINT, signal_handler)
 
+    @_timer.time_it
     def _detailed_batch_manager_and_queue_state_msg(self, batch: "_Batch") -> str:
         batch_count = 0
         log_msg = '\n' + '=' * 50 + '\n'

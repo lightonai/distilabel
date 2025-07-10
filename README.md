@@ -198,6 +198,7 @@ To directly contribute with `distilabel`, check our [good first issues](https://
       - Batch level: controlled by `use_cache` and `invalidate_cache` when initializing the `Step/Task`
       - LM Request Level: controlled by `use_cache` and `invalidate_cache` when initializing the OpenAILM.
       - Distiset level: controlled by `use_cache` and `invalidate_distiset` when calling `pipeline.run()`.
+- You can enable a function level timer with `DISTILABEL_ENABLE_TIMER=1`. You can decorate functions as shown in `distilabel/pipeline/base.py`.
 
 ## Notes on Distilabel (Issues and Helpful Knowledge)
 - **Short Version**: distilabel is very particular about how things are done, so there's a reason why every line is the way it is and I recommend starting off of one of the existing pipelines. Also, reading my code for e.g. the single page pipeline will tell you how to build on top of distilabel. Use the rest of this list as an issue tracker so people know how to solve issues in the future.

@@ -5,6 +5,7 @@ from distilabel.steps import (
     StepResources, 
     LoadDataFromDicts,
     LoadPydanticAsColumns,
+    LoadDataFromDataset,
     FilterRows,
     ListToRows,
 )
@@ -39,7 +40,7 @@ def run_pipeline(config: Config):
     
     stages = config.stages
     dataset = load_from_disk('out/mp_synthetic_data')['single_pages']
-    dataset = list(dataset.remove_columns(['hard_negs_img_img', 'hard_negs_txt_img']))
+    dataset = dataset.remove_columns(['hard_negs_img_img', 'hard_negs_txt_img'])
     with Pipeline(
         name="single_page_qa",
         description="Load mp synthetic data, sample system prompts and generate questions and answers",
@@ -47,7 +48,7 @@ def run_pipeline(config: Config):
     ) as pipeline:
         ################## STAGE 0: GENERATE QUESTIONS ##################
         stage = stages[STAGE]
-        load_data = LoadDataFromDicts(name="load_data", data=dataset, batch_size=32)  # cols: ['source', ...]
+        load_data = LoadDataFromDataset(name="load_data", dataset=dataset, batch_size=32)  # cols: ['source', ...]
         # the data router handles routing the data to different lms according to the data_ratio
         data_router = pipe_utils.data_router(
             step_distribution=[lm_config.data_ratio for lm_config in stage.lm_configs]

@@ -54,6 +54,7 @@ from distilabel.steps.generators.huggingface import (
     LoadDataFromDisk,
     LoadDataFromFileSystem,
     LoadDataFromHub,
+    LoadDataFromDataset,
 )
 from distilabel.steps.generators.utils import make_generator_step
 from distilabel.steps.globals.huggingface import PushToHub
@@ -89,6 +90,7 @@ __all__ = [
     "LoadDataFromDisk",
     "LoadDataFromFileSystem",
     "LoadDataFromHub",
+    "LoadDataFromDataset",
     "LoadPydanticAsColumns",
     "ListToRows",
     "MergeColumns",

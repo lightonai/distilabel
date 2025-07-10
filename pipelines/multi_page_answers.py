@@ -6,6 +6,7 @@ from distilabel.steps import (
     StepResources, 
     LoadDataFromDicts,
     LoadPydanticAsColumns,
+    LoadDataFromDataset,
     FilterRows,
     ListToRows,
 )
@@ -47,7 +48,7 @@ def run_pipeline(config: Config):
     aps = utils.add_split_label(list(dataset['adjacent_pages_short']), 'adjacent_pages_short')
     hns = utils.randomize_source_order(hns)
     aps = utils.sort_adjacent_pages(aps)
-    dataset = hns + aps
+    dataset = Dataset.from_list(hns + aps)
 
     with Pipeline(
         name="multi_page_answers",
@@ -56,7 +57,7 @@ def run_pipeline(config: Config):
     ) as pipeline:
         ################## STAGE 0 ##################
         stage = stages[STAGE]
-        load_data = LoadDataFromDicts(name="load_data", data=dataset, batch_size=64)  # cols: ['source', 'question', ...]
+        load_data = LoadDataFromDataset(name="load_data", dataset=dataset, batch_size=64)  # cols: ['source', 'question', ...]
         data_router = pipe_utils.data_router(
             step_distribution=[lm_config.data_ratio for lm_config in stage.lm_configs]
         )

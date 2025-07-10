@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 from collections import defaultdict
 from copy import deepcopy
 from dataclasses import dataclass, field
@@ -101,11 +102,12 @@ class _BatchManagerStep(_Serializable):
     next_expected_created_from_batch_seq_no: int = 0
     next_expected_seq_no: Dict[str, Tuple[int, int]] = field(default_factory=dict)
     global_next_seq_no: int = 0
-    global_received_seq_nos: List[int] = field(default_factory=list)
+    global_received_seq_nos: Set[int] = field(default_factory=set)
     step_signature: Optional[str] = None
     use_cache: bool = False
     step_offset: Dict[str, Tuple[int, int]] = field(default_factory=dict)
     _all_added_batches: List[_Batch] = field(default_factory=list)
+    _track_batches: bool = field(default_factory=lambda: os.getenv("DISTILABEL_LOG_LEVEL") == "DEBUG")
 
     def add_batch(self, batch: _Batch, prepend: bool = False) -> None:
         """Add a batch of data from `batch.step_name` to the step. It will accumulate the
@@ -118,10 +120,10 @@ class _BatchManagerStep(_Serializable):
                 queue, and the step is stopped before processing the batch, the batch doesn't
                 get lost. Defaults to `False`.
         """
-        from copy import deepcopy
-        self._all_added_batches.append(deepcopy(batch))
-        from_step = batch.step_name
+        if self._track_batches:
+            self._all_added_batches.append(batch.copy())
 
+        from_step = batch.step_name
         if prepend:
             self.built_batches.append(batch)
         else:
@@ -218,7 +220,7 @@ class _BatchManagerStep(_Serializable):
             previous_step
             for previous_step, batches in self.data.items()
             if previous_step not in self.last_batch_received
-            and sum(len(batch.data[0]) for batch in batches) < self.input_batch_size  # type: ignore
+            and sum(batch.num_rows() for batch in batches) < self.input_batch_size  # type: ignore
         ]
 
     def set_next_expected_seq_no(
@@ -252,12 +254,9 @@ class _BatchManagerStep(_Serializable):
         """Sets a shared next expected sequence number for the successors of a step.
         This tracks the seq_no for which all batches with lower seq_no have been received.
         """
-        self.global_received_seq_nos.append(received_seq_no)
-        # maximum of 1 past what has been received
-        for i in range(max(self.global_received_seq_nos) + 2):
-            if i not in self.global_received_seq_nos:
-                self.global_next_seq_no = i
-                break
+        self.global_received_seq_nos.add(received_seq_no)
+        while self.global_next_seq_no in self.global_received_seq_nos:
+            self.global_next_seq_no += 1
 
     def notify_route_step_of_last_batch(self) -> None:
         """Sets last_batch_routed flag to True (assumes this is a route step)."""
@@ -751,7 +750,7 @@ class _BatchManagerStep(_Serializable):
             "next_expected_created_from_batch_seq_no": self.next_expected_created_from_batch_seq_no,
             "next_expected_seq_no": self.next_expected_seq_no,
             "global_next_seq_no": self.global_next_seq_no,
-            "global_received_seq_nos": self.global_received_seq_nos,
+            "global_received_seq_nos": list(self.global_received_seq_nos),
             "step_signature": self.step_signature,
             "use_cache": self.use_cache,
             "step_offset": self.step_offset,
@@ -850,9 +849,7 @@ class _BatchManager(_Serializable):
 
         return False
 
-    def register_batch(
-        self, batch: _Batch, steps_data_path: Optional["StrOrPath"] = None
-    ) -> None:
+    def register_batch(self, batch: _Batch) -> None:
         """Method to register a batch received from a step. It will keep track of the
         sequence number and the last batch received from the step in the internal maps.
 
@@ -869,8 +866,8 @@ class _BatchManager(_Serializable):
         if not last_batch or (last_batch and last_batch.seq_no < seq_no):
             self._last_batch_received[step_name] = batch
 
-        if steps_data_path:
-            self.write_batch_data(batch, steps_data_path)
+        # if steps_data_path:
+        #     self.write_batch_data(batch, steps_data_path)
 
     def write_batch_data(self, batch: _Batch, steps_data_path: Path) -> None:
         """Writes the batch to the steps data directory.

@@ -370,11 +370,12 @@ class Pipeline(BasePipeline):
         ):
             return distiset
 
+        self._managers = {}
         num_processes = self.dag.get_total_replica_count()
         with (
             mp.Manager() as manager,
             _NoDaemonPool(
-                num_processes,
+                num_processes * 2,  # extra processes in case
                 initializer=_init_worker,
                 initargs=(
                     self._log_queue,
@@ -385,8 +386,8 @@ class Pipeline(BasePipeline):
         ):
             self._manager = manager
             self._pool = pool
-            self._output_queue = self.QueueClass()
-            self._load_queue = self.QueueClass()
+            self._output_queue = self.QueueClass('output')
+            self._load_queue = self.QueueClass('load')
             self._handle_keyboard_interrupt()
 
             # Run the loop for receiving the load status of each step
@@ -416,22 +417,23 @@ class Pipeline(BasePipeline):
 
         return distiset
 
-    @property
-    def QueueClass(self) -> Callable[..., ManagedListQueue]:
+    def QueueClass(self, name: str) -> ManagedListQueue:
         """The callable used to create the input and output queues.
 
         Returns:
             The callable to create a `ManagedListQueue`.
         """
-        assert self._manager is not None, "Manager is not initialized before QueueClass access"
-        return functools.partial(
-            ManagedListQueue, 
-            mp_list=self._manager.list(), 
-            condition=self._manager.Condition()
+        # give each queue/step its own manager to avoid contention
+        if name not in self._managers:
+            manager = mp.Manager()
+            self._managers[name] = manager
+        return ManagedListQueue(
+            mp_list=self._managers[name].list(), 
+            condition=self._managers[name].Condition(),
         )
 
     def _create_step_input_queue(self, step_name: str) -> ManagedListQueue:
-        input_queue = self.QueueClass()
+        input_queue = self.QueueClass(step_name)
         self.dag.set_step_attr(step_name, INPUT_QUEUE_ATTR_NAME, input_queue)
         return input_queue
 
@@ -538,6 +540,11 @@ class Pipeline(BasePipeline):
         if self._manager:
             self._manager.shutdown()
             self._manager.join()
+        
+        for manager in self._managers.values():
+            manager.shutdown()
+            manager.join()
+        self._managers = None
 
     def _set_steps_not_loaded_exception(self) -> None:
         """Raises a `RuntimeError` notifying that the steps load has failed.
@@ -579,6 +586,11 @@ class Pipeline(BasePipeline):
                     self._manager.shutdown()
                     self._manager.join()
                     self._manager = None
+                
+                for manager in self._managers.values():
+                    manager.shutdown()
+                    manager.join()
+                self._managers = None
 
                 stop_logging()
 
