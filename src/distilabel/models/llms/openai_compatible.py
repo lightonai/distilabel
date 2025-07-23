@@ -69,7 +69,7 @@ class VLM:
     _vlm_logger = logging.getLogger(f"distilabel.vlm")
     _executor: "ProcessPoolExecutor | None" = PrivateAttr(default=None)
 
-    def _format_input(self, input: dict, lm_input_cols: list[str], lm_input_col_prefixes: list[str]) -> 'ChatType':
+    def format_input(self, input: dict, lm_input_cols: list[str], lm_input_col_prefixes: list[str]) -> 'ChatType':
         system = self.prompt_sampler.generate_prompt()
         input |= {'system': system}  # inplace update the input to sneak it into the format_output of LMGenerationTask
         return _format_one_input((

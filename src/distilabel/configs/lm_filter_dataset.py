@@ -12,8 +12,8 @@ from distilabel import utils
 
 lm_configs=[
     LMConfig(
-        path='Qwen/Qwen2.5-VL-32B-Instruct', 
-        # path='Qwen/Qwen2-VL-7B-Instruct',
+        # path='Qwen/Qwen2.5-VL-32B-Instruct', 
+        path='Qwen/Qwen2-VL-7B-Instruct',
         data_ratio=1.0, 
         task_name='label_reference_pages',
         temperature=0.1,
@@ -31,7 +31,7 @@ lm_configs=[
     ),
 ]
 
-AVAILABLE_GPUS = [0, 1, 2, 3, 4, 5, 6, 7]
+AVAILABLE_GPUS = [4, 5, 6, 7]
 stages = [
     Stage(
         lm_configs=lm_configs,
@@ -41,5 +41,5 @@ stages = [
     ),
 ]
 
-config = Config(stages=stages, debug_with_running_vllm=False)
+config = Config(stages=stages, debug_with_running_vllm=True)
 

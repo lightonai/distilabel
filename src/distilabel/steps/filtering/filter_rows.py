@@ -1,12 +1,15 @@
 from typing import TYPE_CHECKING, Callable
 from distilabel.steps import Step, StepInput
 from pydantic import Field
+from distilabel.utils.timer import get_timer
 
 if TYPE_CHECKING:
     from distilabel.typing import (
         StepColumns,
         StepOutput,
     )
+
+_timer = get_timer()
 
 class FilterRows(Step):
     '''
@@ -40,6 +43,7 @@ class FilterRows(Step):
     def outputs(self) -> 'StepColumns':
         return self.cols
 
+    @_timer.time_it
     def process(self, *inputs: StepInput) -> 'StepOutput':  
         for step_input in inputs:
             yield [

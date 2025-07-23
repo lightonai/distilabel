@@ -1045,6 +1045,44 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
                     break
 
             self._manage_batch_flow(batch)
+            if batch.last_batch and batch.step_name == 'label_references_0':
+                self._timer.enable()
+            if batch.last_batch and batch.step_name == 'drop_reference_pages':
+                self._logger.info(f"should_continue_processing: {self._should_continue_processing()}\n{self._batch_manager.can_generate()=}\n{self._stop_called=}\n")
+                log_called = False
+                def log_():
+                    nonlocal log_called
+                    if log_called:
+                        return
+                    self._logger.info(f'{self._batch_manager._last_batch_received=}')
+                    self._logger.info(f'{self._batch_manager._last_batch_flag_sent_to=}')
+                    self._logger.info(f'{self._batch_manager._route_steps_receiving_no_batches=}')
+                    log_called = True
+
+                for step_name, batch in self._batch_manager._last_batch_received.items():
+                    if (  # exemptions from the following list of conditions
+                        # a route step that received a last batch flag
+                        # (not all route steps will send a last batch to be added to _last_batch_received)
+                        step_name in self._batch_manager._last_batch_flag_sent_to
+                        or step_name in self._batch_manager._route_steps_receiving_no_batches
+                    ):
+                        continue
+
+                    if not batch:
+                        self._logger.info(f'{step_name=} {batch=}')
+                        log_()
+
+                    if batch.last_batch and self._batch_manager._missing_seq_no(batch):
+                        self._logger.info(f'missing seq no {step_name=}\n\t{batch=}')
+                        log_()
+
+                    if not batch.last_batch:
+                        self._logger.info(f'not last batch {step_name=}\n\t{batch=}')
+                        log_()
+
+                    if not self._batch_manager.get_last_batch_sent(step_name):
+                        self._logger.info(f'not last batch sent {step_name=}\n\t{batch=}')
+                        log_()
 
             # If there is another load stage and all the `last_batch`es from the stage
             # have been received, then load the next stage.
@@ -1278,7 +1316,7 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
 
         self._add_batch_for_recovering_offline_batch_generation()
 
-        if self._timer.enabled:
+        if self._timer._enabled:
             self._logger.info(self._timer.get_summary())
 
     def _run_load_queue_loop_in_thread(self) -> threading.Thread:
@@ -1913,7 +1951,8 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
         assert self._batch_manager, "Batch manager is not set"
 
         self._batch_manager.register_batch(
-            batch, steps_data_path=self._cache_location["steps_data"]
+            batch, 
+            # steps_data_path=self._cache_location["steps_data"]
         )
         step: "Step" = self.dag.get_step(batch.step_name)[constants.STEP_ATTR_NAME]
         for successor in self.dag.get_step_successors(step.name):  # type: ignore

@@ -59,7 +59,7 @@ def run_pipeline(config: Config):
                 stage=stage,
                 llm=lm,
                 lm_config=lm.lm_config,
-                input_formatter=lm._format_input,
+                input_formatter=lm.format_input,
                 parallel_input_formatter=lm.parallel_format_inputs,
                 input_batch_size=256,
                 resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.tp_size),
@@ -94,7 +94,8 @@ def run_pipeline(config: Config):
         ),
         # use_cache=False,  # turn off distiset level caching
         invalidate_distiset=True,
-        use_fs_to_pass_data=False,  # will keep data not being actively read/modified in the fsspec fs (which can be local disk or others)
+        use_fs_to_pass_data=False,  # True will keep data not being actively read/modified in the fsspec fs (which can be local disk or others)
+        storage_parameters={'path': '/opt/home/austin/distilabel_fsspec/'},
     )
     return distiset
 
@@ -102,5 +103,5 @@ if __name__ == "__main__":
     distiset = run_pipeline(config)['default']['train']
     distiset = distiset.remove_columns(['distilabel_metadata'])  # don't need this for this pipeline
 
-    distiset.save_to_disk('out/scraped_v0.3_with_txt_img_neg_references_filtered')
+    # distiset.save_to_disk('out/scraped_v0.3_with_txt_img_neg_references_filtered')
     

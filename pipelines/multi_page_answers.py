@@ -68,7 +68,7 @@ def run_pipeline(config: Config):
                 stage=stage,
                 lm=lm,
                 lm_config=lm.lm_config,
-                input_formatter=lm._format_input,
+                input_formatter=lm.format_input,
                 lm_input_cols=['question'],
                 input_batch_size=64,
                 resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.tp_size),
