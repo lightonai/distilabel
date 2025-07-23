@@ -81,6 +81,7 @@ class _Batch(_Serializable, SignatureMixin):
             seq_no=self.seq_no + 1, step_name=self.step_name, last_batch=self.last_batch
         )
 
+    @_timer.time_it
     def set_data(self, data: List[List[Dict[str, Any]]]) -> None:
         """Sets the data of the batch and updates the size of the batch.
 
@@ -91,6 +92,7 @@ class _Batch(_Serializable, SignatureMixin):
         self.size = len(data[0])
         self._update_data_hash()
 
+    @_timer.time_it
     def get_data(self, num_rows: Union[int, None] = None) -> List[Dict[str, Any]]:
         """Takes `num_rows` from the data of the batch and returns it. This method will
         also remove the data from the batch and update the hash of the data.
@@ -136,6 +138,7 @@ class _Batch(_Serializable, SignatureMixin):
             return self._num_rows_fs
         return sum(len(d) for d in self.data)
 
+    @_timer.time_it
     def _update_data_hash(self) -> None:
         """Updates the hash of the data of the batch."""
         self.data_hash = hashlib.sha1(str(self.data).encode()).hexdigest()
@@ -199,6 +202,7 @@ class _Batch(_Serializable, SignatureMixin):
         """
         return copy.deepcopy(self)
 
+    @_timer.time_it
     def write_batch_data_to_fs(
         self,
         fs: Optional[fsspec.AbstractFileSystem] = None,
@@ -246,6 +250,7 @@ class _Batch(_Serializable, SignatureMixin):
         self.data = []
         self.data_path = str(seq_no_dir)
 
+    @_timer.time_it
     def read_batch_data_from_fs(self) -> None:
         """Reads the content of the batch from the filesystem."""
         if not self.data_path:
@@ -268,16 +273,19 @@ class _Batch(_Serializable, SignatureMixin):
         self._fs.rm(self.data_path, recursive=True)
         self._num_rows_fs = None
 
+    @_timer.time_it
     def routed_to_cached(self, cache_root: Path) -> bool:
         """Check if the batch is cached in the given cache_root."""
         cache_db = get_routed_to_cache_db(cache_root)
         return cache_db.exists(self.signature)
 
+    @_timer.time_it
     def cache_routed_to(self, cache_root: Path) -> None:
         """Cache the field batch_routed_to in the given cache_root."""
         cache_db = get_routed_to_cache_db(cache_root)
         cache_db.set(self.signature, self.batch_routed_to)
 
+    @_timer.time_it
     def load_routed_to(self, cache_root: Path) -> None:
         """Load the field batch_routed_to from cache."""
         cache_db = get_routed_to_cache_db(cache_root)
@@ -285,10 +293,12 @@ class _Batch(_Serializable, SignatureMixin):
             self.batch_routed_to = cache_db.get(self.signature)
 
     @classmethod
+    @_timer.time_it
     def cached(cls, path: Path) -> bool:
         """Check if the batch is cached in the given path."""
         return path.exists()
 
+    @_timer.time_it
     def cache(self, path: Path) -> None:
         """Cache the batch in the given path."""
         self.save(path, format="json")

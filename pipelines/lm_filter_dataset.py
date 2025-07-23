@@ -35,7 +35,7 @@ def run_pipeline(config: Config):
     
     stages = config.stages
     dataset = load_from_disk('/mnt/nfs/dse/scraped_v0.3_with_txt_img_neg')
-    # dataset = dataset.select(range(16000))
+    # dataset = dataset.select(range(1_000_000))
     dataset = dataset.remove_columns([col for col in dataset.column_names if col != 'image_filename'])
     dataset = dataset.rename_column('image_filename', 'source')
     dataset = dataset.map(lambda x: {'source': [x['source']]}, num_proc=16)
@@ -92,10 +92,9 @@ def run_pipeline(config: Config):
                 len(stage.available_gpus),
             )
         ),
-        # use_cache=False,  # turn off distiset level caching
+        use_cache=False,  # turn off distiset level caching
         invalidate_distiset=True,
         use_fs_to_pass_data=False,  # True will keep data not being actively read/modified in the fsspec fs (which can be local disk or others)
-        storage_parameters={'path': '/opt/home/austin/distilabel_fsspec/'},
     )
     return distiset
 
@@ -103,5 +102,5 @@ if __name__ == "__main__":
     distiset = run_pipeline(config)['default']['train']
     distiset = distiset.remove_columns(['distilabel_metadata'])  # don't need this for this pipeline
 
-    # distiset.save_to_disk('out/scraped_v0.3_with_txt_img_neg_references_filtered')
+    distiset.save_to_disk('out/scraped_v0.3_with_txt_img_neg_references_filtered')
     

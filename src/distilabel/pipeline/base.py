@@ -215,6 +215,8 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
         self.dag = DAG()
         self._debug = debug
         self.use_cache = False
+        self._cached_signature = None
+        self._cached_agg_step_signature = None
 
         if cache_dir:
             self._cache_dir = Path(cache_dir)
@@ -300,7 +302,9 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
         Returns:
             Signature of the pipeline.
         """
-
+        if self._cached_signature is not None:
+            return self._cached_signature
+        
         pipeline_dump = self.dump()["pipeline"]
         steps_names = list(self.dag)
         connections_info = [
@@ -317,11 +321,12 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
                 step += f"-{type_info}"
             routing_batch_functions_info.append(step)
 
-        return hashlib.sha1(
+        self._cached_signature = hashlib.sha1(
             ",".join(
                 steps_names + connections_info + routing_batch_functions_info
             ).encode()
         ).hexdigest()
+        return self._cached_signature
 
     def run(
         self,
@@ -905,11 +910,15 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
         Returns:
             The aggregated signature.
         """
+        if self._cached_agg_step_signature is not None:
+            return self._cached_agg_step_signature
+        
         signatures = []
         for step_name in self.dag:
             step: "_Step" = self.dag.get_step(step_name)[constants.STEP_ATTR_NAME]
             signatures.append(step.signature)
-        return hashlib.sha1("".join(signatures).encode()).hexdigest()
+        self._cached_agg_step_signature = hashlib.sha1("".join(signatures).encode()).hexdigest()
+        return self._cached_agg_step_signature
 
     def _get_steps_load_stages(self) -> Tuple[List[List[str]], List[List[str]]]:
         return self.dag.get_steps_load_stages(self._load_groups)
@@ -1032,9 +1041,6 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
                 self._received_batches.append(batch.copy())
             self._process_batch(batch)
 
-            if self.track_batches:
-                self._logger.debug(self._detailed_batch_manager_and_queue_state_msg(batch))
-
             # If `_stop_called` was set to `True` while waiting for the output queue, then
             # we need to handle the stop of the pipeline and break the loop to avoid
             # propagating the batches through the pipeline and making the stop process
@@ -1045,44 +1051,6 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
                     break
 
             self._manage_batch_flow(batch)
-            if batch.last_batch and batch.step_name == 'label_references_0':
-                self._timer.enable()
-            if batch.last_batch and batch.step_name == 'drop_reference_pages':
-                self._logger.info(f"should_continue_processing: {self._should_continue_processing()}\n{self._batch_manager.can_generate()=}\n{self._stop_called=}\n")
-                log_called = False
-                def log_():
-                    nonlocal log_called
-                    if log_called:
-                        return
-                    self._logger.info(f'{self._batch_manager._last_batch_received=}')
-                    self._logger.info(f'{self._batch_manager._last_batch_flag_sent_to=}')
-                    self._logger.info(f'{self._batch_manager._route_steps_receiving_no_batches=}')
-                    log_called = True
-
-                for step_name, batch in self._batch_manager._last_batch_received.items():
-                    if (  # exemptions from the following list of conditions
-                        # a route step that received a last batch flag
-                        # (not all route steps will send a last batch to be added to _last_batch_received)
-                        step_name in self._batch_manager._last_batch_flag_sent_to
-                        or step_name in self._batch_manager._route_steps_receiving_no_batches
-                    ):
-                        continue
-
-                    if not batch:
-                        self._logger.info(f'{step_name=} {batch=}')
-                        log_()
-
-                    if batch.last_batch and self._batch_manager._missing_seq_no(batch):
-                        self._logger.info(f'missing seq no {step_name=}\n\t{batch=}')
-                        log_()
-
-                    if not batch.last_batch:
-                        self._logger.info(f'not last batch {step_name=}\n\t{batch=}')
-                        log_()
-
-                    if not self._batch_manager.get_last_batch_sent(step_name):
-                        self._logger.info(f'not last batch sent {step_name=}\n\t{batch=}')
-                        log_()
 
             # If there is another load stage and all the `last_batch`es from the stage
             # have been received, then load the next stage.
@@ -1138,12 +1106,7 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
         for step_name in load_stages[self._current_stage]:
             if (
                 sum(len(v) for v in self._batch_manager._steps[step_name].data.values()) > 0
-                or len(
-                    [
-                        batch for batch in self._steps_input_queues[step_name].items()
-                        if batch not in [None, constants.LAST_BATCH_SENT_FLAG]
-                    ]
-                ) > 0
+                or self._steps_input_queues[step_name].batches_count() > 0
             ):
                 return True
 
@@ -1731,6 +1694,7 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
         
         self._handle_router_last_batch(batch)
 
+    @_timer.time_it
     def _send_to_step(self, step_name: str, to_send: Any) -> None:
         """Sends something to the input queue of a step.
 
@@ -1741,6 +1705,7 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
         input_queue = self.dag.get_step(step_name)[constants.INPUT_QUEUE_ATTR_NAME]
         input_queue.put(to_send)
 
+    @_timer.time_it
     def _send_batch_to_step(self, batch: "_Batch") -> None:
         """Sends a batch to the input queue of a step, writing the data of the batch
         to the filesystem and setting `batch.data_path` with the path where the data
@@ -2035,7 +2000,7 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
                 f"🚏 Using '{step.name}' routing function to send batch {batch.seq_no} to steps: {successors_str}"
             )
 
-        return route_to, list(set(successors) - set(route_to)), route_to != successors
+        return route_to, list(set(successors) - set(route_to)), set(route_to) != set(successors)
 
     @_timer.time_it
     def _set_next_expected_seq_no(
@@ -2121,58 +2086,6 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
             self._stop()
 
         return signal.signal(signal.SIGINT, signal_handler)
-
-    @_timer.time_it
-    def _detailed_batch_manager_and_queue_state_msg(self, batch: "_Batch") -> str:
-        batch_count = 0
-        log_msg = '\n' + '=' * 50 + '\n'
-        log_msg += '############################## BATCH ##############################\n'
-        log_msg += f'{batch=}\n'
-        log_msg += '############################## BATCH MANAGER ##############################\n'
-
-        current_batch_manager_counts: Dict[str, int] = {}
-        for step_name in self._batch_manager._steps.keys():
-            if step_name == 'load_data': continue
-            bm_step = self._batch_manager._steps[step_name]
-            grouped_batches = bm_step._group_batches_by_created_from()
-            l = sum(len(v[1]) for v in grouped_batches)
-            current_batch_manager_counts[step_name] = l
-            delta = l - self._prev_batch_manager_counts.get(step_name, 0)
-            s = '\n'.join(str(v) for v in grouped_batches)
-            log_msg += f'{step_name=} | abs: {l} (delta: {delta:+}d) | {bm_step.next_expected_seq_no=} | {bm_step.global_next_seq_no=} | {bm_step.next_expected_created_from_batch_seq_no=}\n{s}\n\n'
-            batch_count += l
-        self._prev_batch_manager_counts = current_batch_manager_counts
-
-        log_msg += '############################## INPUT QUEUES ##############################\n'
-        current_input_queue_counts: Dict[str, int] = {}
-        for step_name, queue_obj in self._steps_input_queues.items():
-            if step_name == 'load_data': continue
-            q_items = queue_obj.items()
-            q_len = len(q_items)
-            current_input_queue_counts[step_name] = q_len
-            delta = q_len - self._prev_input_queue_counts.get(step_name, 0)
-            log_msg += f'{step_name=} | abs: {q_len} (delta: {delta:+}d) |\n{q_items}\n\n'
-            batch_count += len([b for b in q_items if b not in [None, constants.LAST_BATCH_SENT_FLAG]])
-        self._prev_input_queue_counts = current_input_queue_counts
-
-        log_msg += '############################## OUTPUT QUEUE ##############################\n'
-        output_q_list = self._output_queue.items()
-        output_q_len = len(output_q_list)
-        output_q_delta = output_q_len - self._prev_output_queue_count
-        log_msg += f'output_queue | abs: {output_q_len} (delta: {output_q_delta:+}d) |\n{output_q_list}\n\n'
-        self._prev_output_queue_count = output_q_len
-        batch_count += len([b for b in output_q_list if b not in [None, constants.LAST_BATCH_SENT_FLAG]])
-
-        total_batch_count_delta = batch_count - self._prev_total_batch_count
-        log_msg += f'batch_count: abs: {batch_count} (delta: {total_batch_count_delta:+}d)\n'
-        self._prev_total_batch_count = batch_count
-
-        log_msg += '############################## STAGES LAST BATCHES ##############################\n'
-        _, stages_last_steps = self._get_steps_load_stages()
-        stage_last_steps = stages_last_steps[self._current_stage]
-        log_msg += f'{self._stages_last_batch=}\n{stage_last_steps=}\n'
-        log_msg += '=' * 50
-        return log_msg
 
     def get_lm_cache_stats(self) -> Dict[str, Any]:
         """Get statistics about the language model cache.

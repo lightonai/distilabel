@@ -23,6 +23,7 @@ import pyarrow.parquet as pq
 from distilabel.pipeline.batch import _Batch
 from distilabel.utils.dicts import flatten_dict
 from distilabel.utils.files import list_files_in_dir
+from distilabel.constants import WRITE_BUFFER_SIZE
 
 
 class _WriteBuffer:
@@ -66,7 +67,7 @@ class _WriteBuffer:
         }
         # TODO: make this configurable
         self._buffers_dump_batch_size: Dict[str, int] = {
-            step: 50 for step in leaf_steps
+            step: WRITE_BUFFER_SIZE for step in leaf_steps
         }
         self._buffer_last_schema = {}
         self._buffers_last_file: Dict[str, int] = {step: 1 for step in leaf_steps}

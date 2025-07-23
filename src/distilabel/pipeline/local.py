@@ -42,6 +42,7 @@ from distilabel.pipeline.step_wrapper import _StepWrapper, _StepWrapperException
 from distilabel.utils.logging import setup_logging, stop_logging
 from distilabel.utils.ray import script_executed_in_ray_cluster
 from distilabel import constants
+from distilabel.pipeline.tracking_queue import TrackingQueue
 
 if TYPE_CHECKING:
     import logging
@@ -52,147 +53,6 @@ if TYPE_CHECKING:
     from distilabel.typing import InputDataset, LoadGroups
 
 _SUBPROCESS_EXCEPTION: Union[Exception, None] = None
-
-
-class ManagedListQueue:
-    """
-    A queue-like class that uses a multiprocessing.Manager().list() for storage
-    and a multiprocessing.Manager().Condition() for synchronization.
-    It provides 'put', 'get', 'qsize', 'empty', and an 'items' method for
-    non-consuming inspection of all current items.
-
-    The reason for the class is a shared interface with the Ray version and 
-    the items method which is used to read the 'queue' contents.
-    """
-
-    def __init__(self, mp_list, condition, maxsize: int = 0):
-        self._maxsize = maxsize
-        self._list = mp_list
-        self._condition = condition
-
-    def qsize(self) -> int:
-        with self._condition:
-            return len(self._list)
-
-    def empty(self) -> bool:
-        with self._condition:
-            return not self._list
-
-    def full(self) -> bool:
-        if self._maxsize <= 0:
-            return False
-        with self._condition:
-            return len(self._list) >= self._maxsize
-
-    def put(self, item: Any, block: bool = True, timeout: Optional[float] = None) -> None:
-        with self._condition:
-            if self._maxsize > 0:
-                if not block:
-                    if self.full():
-                        raise mp.queues.Full
-                elif timeout is None:
-                    while self.full():
-                        self._condition.wait()
-                else:
-                    endtime = time.monotonic() + timeout
-                    while self.full():
-                        remaining = endtime - time.monotonic()
-                        if remaining <= 0.0:
-                            raise mp.queues.Full
-                        self._condition.wait(remaining)
-            self._list.append(item)
-            self._condition.notify()
-
-    def get(
-        self, 
-        block: bool = True, 
-        timeout: Optional[float] = None, 
-        return_snapshot: bool = False,
-    ) -> Any:
-        '''
-        If return_snapshot is True, the method will return a tuple with the item 
-        and a snapshot of the queue after the item is removed, gathered while holding
-        the internal condition lock.
-        '''
-        with self._condition:
-            if not block:
-                if self.empty():
-                    raise mp.queues.Empty
-            elif timeout is None:
-                while self.empty():
-                    self._condition.wait()
-            else:
-                endtime = time.monotonic() + timeout
-                while self.empty():
-                    remaining = endtime - time.monotonic()
-                    if remaining <= 0.0:
-                        raise mp.queues.Empty
-                    self._condition.wait(remaining)
-            item = self._list.pop(0)
-            self._condition.notify()
-            if return_snapshot:
-                snapshot = list(self._list)
-                return item, snapshot
-            return item
-
-    def items(
-        self,
-        pop_if: Optional[Callable[[List[Any]], bool]] = None,
-    ) -> Union[List[Any], Tuple[List[Any], Optional[Any]]]:
-        """Returns a snapshot (*copy*) of the queue contents.
-
-        If *pop_if* is provided, the first element of the queue will be **atomically**
-        removed **and** returned together with the snapshot *after* removal **only if**
-        ``pop_if(snapshot_before)`` evaluates to *True*.
-
-        The whole operation is executed while holding the internal condition, so the
-        snapshot and the (possibly) removed element are consistent with each other and
-        no other process can interleave modifications in-between.
-
-        Parameters
-        ----------
-        pop_if : callable | None
-            A callable that receives a *copy* of the queue contents *before* any
-            removal. If it returns *True* the first element (index ``0``) is removed
-            and returned; otherwise the queue is left untouched. If *None* (default),
-            the method behaves exactly like the previous implementation and simply
-            returns a snapshot of the queue.
-
-        Returns
-        -------
-        list
-            The snapshot of the queue **after** the optional removal when
-            ``pop_if`` is *None*.
-        (list, Any | None)
-            When ``pop_if`` is given, the method returns a tuple where the first item
-            is the snapshot of the queue *after* the potential removal and the second
-            item is the element that was removed (or *None* if nothing was popped).
-        """
-
-        with self._condition:
-            # Fast-path: keep backward-compatibility if no *pop_if* has been provided.
-            if pop_if is None:
-                return list(self._list)
-
-            snapshot_before: List[Any] = list(self._list)
-            popped_item: Optional[Any] = None
-
-            try:
-                should_pop = pop_if(snapshot_before)
-            except Exception:
-                # Ensure that an error in the user supplied predicate does not leave
-                # the queue in an inconsistent state. Re-raise after releasing lock.
-                # I am unsure if this is necessary, but it's o3's idea
-                raise
-
-            if should_pop and len(self._list) > 0:
-                popped_item = self._list.pop(0)
-                # Notify potential producers waiting on full() condition.
-                self._condition.notify()
-
-            snapshot_after: List[Any] = list(self._list)
-
-            return snapshot_after, popped_item
 
 
 def _init_worker(
@@ -417,27 +277,27 @@ class Pipeline(BasePipeline):
 
         return distiset
 
-    def QueueClass(self, name: str) -> ManagedListQueue:
-        """The callable used to create the input and output queues.
-
-        Returns:
-            The callable to create a `ManagedListQueue`.
-        """
-        # give each queue/step its own manager to avoid contention
+    def QueueClass(self, name: str) -> TrackingQueue:
+        """Factory for queues used by steps (now `TrackingQueue`)."""
         if name not in self._managers:
             manager = mp.Manager()
             self._managers[name] = manager
-        return ManagedListQueue(
-            mp_list=self._managers[name].list(), 
-            condition=self._managers[name].Condition(),
-        )
+        return TrackingQueue(manager=self._managers[name])
 
-    def _create_step_input_queue(self, step_name: str) -> ManagedListQueue:
+    def _create_step_input_queue(self, step_name: str) -> TrackingQueue:
+        """Creates an input queue for a step.
+
+        Args:
+            step_name: The name of the step to create an input queue for.
+
+        Returns:
+            A `TrackingQueue` instance.
+        """
         input_queue = self.QueueClass(step_name)
         self.dag.set_step_attr(step_name, INPUT_QUEUE_ATTR_NAME, input_queue)
         return input_queue
 
-    def _run_step(self, step: "_Step", input_queue: ManagedListQueue, replica: int) -> None:
+    def _run_step(self, step: "_Step", input_queue: TrackingQueue, replica: int) -> None:
         """Runs the `Step` wrapped in a `_ProcessWrapper` in a separate process of the
         `Pool`.
 

@@ -238,22 +238,20 @@ class _StepWrapper:
         step._logger.info(f"✨ Starting process loop for step '{step.name}'...")
         while True:
             if self.is_route_step:
+                # For route steps, we want to ensure that we have at least two items
+                # or the LAST_BATCH_SENT_FLAG before processing a batch. This is to
+                # ensure that we can determine if the current batch is the actual
+                # last batch for this specific route, as the batch with last_batch = True
+                # from the predecessor might go to a different route.
                 while True:
-                    # For route steps, we want to ensure that we have at least two items
-                    # or the LAST_BATCH_SENT_FLAG before processing a batch. This is to
-                    # ensure that we can determine if the current batch is the actual
-                    # last batch for this specific route, as the main `last_batch` flag
-                    # from the predecessor might go to a different route.
-                    pop_if = lambda q_contents_: (
-                        len([b for b in q_contents_ if b not in [LAST_BATCH_SENT_FLAG, None]]) >= 2
-                        or LAST_BATCH_SENT_FLAG in q_contents_
+                    batch, counts = self.input_queue.pop_if(
+                        lambda n_batches_, n_flags_, n_none_: n_batches_ >= 2 or n_flags_ > 0,
                     )
-                    q_contents, batch = self.input_queue.items(pop_if=pop_if)
                     if batch is not None:
                         break
-                    time.sleep(5) # Wait if conditions not met
+                    time.sleep(5)
             else:
-                batch, q_contents = self.input_queue.get(return_snapshot=True)
+                batch, counts = self.input_queue.get_with_counts()
 
             if batch is None:
                 self.step._logger.info(
@@ -261,6 +259,8 @@ class _StepWrapper:
                     f" ID: {self.replica})"
                 )
                 break
+        
+            n_batches, n_flags, n_none = counts
 
             if isinstance(batch, _Batch) and batch.data_path is not None:
                 self.step._logger.debug(f"Reading batch data from '{batch.data_path}'")
@@ -276,10 +276,10 @@ class _StepWrapper:
             if (
                 self.is_route_step
                 and batch != LAST_BATCH_SENT_FLAG
-                and len(q_contents) > 0 # check if anything (even just flags) is left or not
-                and all(b in [LAST_BATCH_SENT_FLAG, None] for b in q_contents)
+                # the next condition checks if all remaining batches are either none or last batch flags
+                and (n_flags + n_none) > 0 and n_batches == 0
             ):
-                batch.route_step_last_batch = True # type: ignore
+                batch.route_step_last_batch = True  # type: ignore
 
             # handle cache hit
             # but we want route_step_last_batch logic to be handled normally

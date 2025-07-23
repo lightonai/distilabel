@@ -53,6 +53,7 @@ OUTPUT_QUEUE_TIMEOUT: Final[int] = 2000
 LAST_BATCH_ROUTED_FLAG: Final[str] = "last_batch_routed"
 STRUCTURED_OUTPUT_RETRIES = 2
 INPUT_QUEUE_LOAD_LEVEL: Final[int] = 128
+WRITE_BUFFER_SIZE: Final[int] = 16384  # 16k rows
 
 
 __all__ = [

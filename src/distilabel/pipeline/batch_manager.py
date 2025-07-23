@@ -17,7 +17,8 @@ from collections import defaultdict
 from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Tuple, Union, Set
+from bisect import bisect_right
+from typing import TYPE_CHECKING, Any, Dict, Iterable, Generator, List, Optional, Tuple, Union, Set
 
 from distilabel.constants import (
     RECEIVES_ROUTED_BATCHES_ATTR_NAME,
@@ -102,6 +103,7 @@ class _BatchManagerStep(_Serializable):
     convergence_step_n_batches_received: Dict[str, int] = field(default_factory=dict)
     convergence_step_n_batches_to_receive: Dict[str, int] = field(default_factory=dict)
     convergence_step_receives_from: Dict[str, bool] = field(default_factory=dict)
+    convergence_step_data_generator: Generator | None = None
     next_expected_created_from_batch_seq_no: int = 0
     next_expected_seq_no: Dict[str, Tuple[int, int]] = field(default_factory=dict)
     global_next_seq_no: int = 0
@@ -112,6 +114,7 @@ class _BatchManagerStep(_Serializable):
     _all_added_batches: List[_Batch] = field(default_factory=list)
     _track_batches: bool = field(default_factory=lambda: os.getenv("DISTILABEL_LOG_LEVEL") == "DEBUG")
 
+    @_timer.time_it
     def add_batch(self, batch: _Batch, prepend: bool = False) -> None:
         """Add a batch of data from `batch.step_name` to the step. It will accumulate the
         data and keep track of the last batch received from the predecessors.
@@ -130,8 +133,15 @@ class _BatchManagerStep(_Serializable):
         if prepend:
             self.built_batches.append(batch)
         else:
-            self.data[from_step].append(batch)
-            self.data[from_step].sort(key=lambda batch: batch.seq_no)
+            batch_list = self.data[from_step]
+
+            # fast path – batches arrive in order
+            if not batch_list or batch.seq_no >= batch_list[-1].seq_no:
+                batch_list.append(batch)
+            else:
+                # out-of-order: O(log n) search, O(n) shift, better than full sort
+                pos = bisect_right([b.seq_no for b in batch_list], batch.seq_no)
+                batch_list.insert(pos, batch)
 
         if batch.last_batch:
             self.last_batch_received.append(from_step)
@@ -369,6 +379,13 @@ class _BatchManagerStep(_Serializable):
             process and a dictionary with the sequence numbers of the batches that were
             used to create the batch.
         """
+        if self.convergence_step_data_generator is None:
+            self.convergence_step_data_generator = self._data_generator_for_convergence_step()
+        return next(self.convergence_step_data_generator)
+
+    @_timer.time_it
+    def _data_generator_for_convergence_step(self) -> Generator:
+        """Creates an generator that yields data for the convergence step."""
         grouped_batches = self._group_batches_by_created_from()
         
         n_selected_rows = 0
@@ -391,9 +408,14 @@ class _BatchManagerStep(_Serializable):
                     self.data[batch.step_name].remove(batch)
 
             if n_selected_rows == self.input_batch_size:
-                break
+                yield list(selected_data.values()), dict(batches_used)
+                n_selected_rows = 0
+                selected_data = defaultdict(list)
+                batches_used = defaultdict(list)
 
-        return list(selected_data.values()), dict(batches_used)
+        yield list(selected_data.values()), dict(batches_used)
+        while True:  # old behavior was no return an empty list when there was no data
+            yield [], {}
 
     @_timer.time_it
     def _get_data_normal(
@@ -503,11 +525,14 @@ class _BatchManagerStep(_Serializable):
         Returns:
             `True` if ready to create a batch, `False` otherwise.
         """
-        total_rows = sum(
-            sum(batch.num_rows() for batch in batches) 
-            for batches in self.data.values()
-        )
-        if total_rows == 0: 
+        rows_available = False
+        for batches in self.data.values():
+            for batch in batches:
+                if batch.num_rows() > 0:  # if there are rows available, we can create a batch
+                    rows_available = True
+                    break
+        
+        if not rows_available:
             return False
         
         if self.convergence_step:
@@ -528,25 +553,21 @@ class _BatchManagerStep(_Serializable):
         Returns:
             `True` if ready to create a batch, `False` otherwise.
         """
-        # no longer considering order because we check that all batches are received, so things are 
-        # in the right order and all contiguous
-        grouped_batches = self._group_batches_by_created_from()
-        if not grouped_batches or not self._all_batches_received_convergence_step():
+        if not self._all_batches_received_convergence_step():
             # we don't want to draw from sequences out of order, but checking if we have received 
             # all batches from a certain seq number (and can therefore draw the last batch from it)
             # is quite complex, so we just wait for all batches to be received
             return False
+        
+        # no need to consider order of available rows because we check that all batches are received, so things are 
+        # in the right order and all contiguous
         available_rows = 0
-        includes_last_batch = False
-        for seq_no, batches in grouped_batches:
-            if any(batch.last_batch for batch, _ in batches):
-                includes_last_batch = True
-            available_rows += sum(batch.num_rows() for batch, _ in batches)
-            if available_rows >= self.input_batch_size:
-                return True
+        for batches in self.data.values():
+            for batch in batches:
+                available_rows += batch.num_rows()
+                if available_rows > 0:
+                    return True
 
-        if available_rows > 0 and includes_last_batch:
-            return True
         return False
 
     @_timer.time_it
@@ -656,19 +677,19 @@ class _BatchManagerStep(_Serializable):
         Returns:
             `True` if the batch to be created is the last one. Otherwise, `False`.
         """
-        # since these are sorted by created_from seq no, last batch should only be true for the last one
-        grouped_batches = self._group_batches_by_created_from()
-        if not grouped_batches:
-            return False
-
         if not self._all_batches_received_convergence_step():
             return False
 
         available_rows = 0
-        for _, batches in grouped_batches:
-            available_rows += sum(batch.num_rows() for batch, _ in batches)
+        n_batches = 0
+        for batches in self.data.values():
+            for batch in batches:
+                n_batches += 1
+                available_rows += batch.num_rows()
+                if available_rows > self.input_batch_size:
+                    return False
 
-        return available_rows <= self.input_batch_size
+        return available_rows <= self.input_batch_size and n_batches > 0
 
     @_timer.time_it
     def _last_batch_normal(self) -> bool:
@@ -717,6 +738,7 @@ class _BatchManagerStep(_Serializable):
                 grouped_batches[batch_seq_no].append((batch, batch_size))
         return grouped_batches
 
+    @_timer.time_it
     def _group_batches_by_created_from(
         self,
     ) -> List[Tuple[int, List[Tuple["_Batch", int]]]]:
