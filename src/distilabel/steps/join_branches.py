@@ -1,7 +1,7 @@
 from collections import defaultdict
 from typing import TYPE_CHECKING, Any, List, Dict
 
-from distilabel.steps.base import GlobalStep, StepInput
+from distilabel.steps.base import GlobalStep, Step, StepInput
 
 if TYPE_CHECKING:
     from distilabel.typing import StepColumns, StepOutput
@@ -25,6 +25,39 @@ def make_hashable(item: Any):
         converted_set_items = [make_hashable(sub_item) for sub_item in item]
         return frozenset(converted_set_items)
     return item
+
+class ConcatenateBranches(Step):
+    """
+    A `Step` that joins rows from multiple input branches, simply concatenating them 
+    and filling in the missing values with `None`.
+
+    Attributes:
+        cols: A list of columns that you can reference in input or output mappings.
+
+    Output:
+        list[`StepOutput`] (a list of dictionaries)
+    """
+
+    cols: List[str] = []
+
+    @property
+    def inputs(self) -> "StepColumns":
+        return self.cols
+
+    @property
+    def outputs(self) -> "StepColumns":
+        return self.cols
+
+    def process(self, *inputs: StepInput) -> "StepOutput":
+        cat_rows = []
+        for branch_input in inputs:
+            cat_rows.extend(
+                [
+                    {**row, **{col: None for col in self.cols if col not in row}}
+                    for row in branch_input
+                ]
+            )
+        yield cat_rows
 
 class JoinParallelBranches(GlobalStep):
     """

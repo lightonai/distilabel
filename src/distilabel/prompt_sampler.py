@@ -2,6 +2,7 @@ import random
 from pathlib import Path as pth 
 import json
 from copy import deepcopy
+from typing import Any
 
 from distilabel.pydantics import CategoricalDist, PromptSamplerConfig
 
@@ -33,8 +34,8 @@ class PromptSampler:
             return kwargs[0]
         return kwargs
 
-    def sample(self):
-        '''Sample a prompt according to the prompt sampler config'''
+    def sample(self) -> dict[str, Any]:
+        '''Sample the kwargs for a prompt according to the prompt sampler config'''
         dists = deepcopy(self.cfg.distributions)
         if self.cfg.samples_per_prompt_kwarg:
             assert dists[self.cfg.samples_per_prompt_kwarg].samples_per_prompt is not None, (

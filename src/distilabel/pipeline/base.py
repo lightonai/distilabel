@@ -453,7 +453,7 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
                 " Returning `Distiset` from cache data..."
             )
             distiset = Distiset.load_from_disk(self._cache_location["distiset"])
-            if self._timer.enabled:
+            if self._timer._enabled:
                 self._logger.info(self._timer.get_summary())
             stop_logging()
             return distiset

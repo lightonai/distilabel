@@ -97,7 +97,7 @@ def make_lms(config: Config, stage: Stage, use_cache: bool = True) -> list[OpenA
                 'temperature': lm_config.temperature, 
                 'max_new_tokens': lm_config.max_new_tokens,
             },
-            debug_with_running_vllm=config.debug_with_running_vllm,
+            use_running_vllm=config.use_running_vllm,
             use_cache=use_cache,
         ) 
         for lm_config in stage.lm_configs

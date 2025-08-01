@@ -1,0 +1,1 @@
+Transcribe the full page in markdown, including all text in the page, provide nothing except the transcription in your response:

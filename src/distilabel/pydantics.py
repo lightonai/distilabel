@@ -114,12 +114,15 @@ class Stage(BaseModel):
 class Config(BaseModel):
     '''Config for a pipeline'''
     stages: list[Stage]
-    debug_with_running_vllm: bool = False
+    use_running_vllm: bool = False
     '''
     if True, all vllm models will expect to be able to call a pre-running model on port 8000.
     
     This is useful for debugging, when you don't want to pay for proprietary models or start a vllm server on launch
     '''
+
+class CoT(BaseModel):
+    chain_of_thought: str
 
 class SinglePageQuestions(BaseModel):
     '''Config for the single page questions output format'''
@@ -152,3 +155,13 @@ class SatisfactoryAnswer(BaseModel):
 class Metalabel(BaseModel):
     is_references_page: bool
     word_count: int
+
+class CountNumberedPages(BaseModel):
+    scratchpad: str
+    is_page_number_visible: bool
+
+class KeyExtraction(CoT):
+    extraction: str
+
+class PosExtraction(CoT):
+    extraction: str

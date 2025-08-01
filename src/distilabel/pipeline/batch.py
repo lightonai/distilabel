@@ -65,8 +65,7 @@ class _Batch(_Serializable, SignatureMixin):
 
     def model_post_init(self, context) -> None:
         # want the signature to only depend on data
-        self.exclude_from_signature.union(set(_Batch.model_fields.keys()) - {'data'})
-        # self.exclude_from_signature = (set(_Batch.model_fields.keys()) | {'type_info'}) - {'data'}
+        self.exclude_from_signature = (set(_Batch.model_fields.keys()) | {'type_info'}) - {'data'}
 
     def next_batch(self) -> "_Batch":
         """Create a new `_Batch` instance with the next batch of data.
@@ -127,7 +126,7 @@ class _Batch(_Serializable, SignatureMixin):
         # self.size = len(self.data[0])
         self._update_data_hash()
 
-        if self.num_rows() != 0:
+        if self.data_path and self._fs and self.num_rows() != 0:
             self.write_batch_data_to_fs()
         
         return data

@@ -30,9 +30,10 @@ from distilabel.steps.columns.group import GroupColumns
 from distilabel.steps.columns.keep import KeepColumns
 from distilabel.steps.columns.merge import MergeColumns
 from distilabel.steps.columns.pydantic_to_cols import LoadPydanticAsColumns
+from distilabel.steps.map import Map
 from distilabel.steps.decorator import step
 from distilabel.steps.deita import DeitaFiltering
-from distilabel.steps.join_branches import JoinParallelBranches
+from distilabel.steps.join_branches import JoinParallelBranches, ConcatenateBranches
 from distilabel.steps.list_to_rows import ListToRows
 from distilabel.steps.embeddings.embedding_generation import EmbeddingGeneration
 from distilabel.steps.embeddings.nearest_neighbour import FaissNearestNeighbour
@@ -84,6 +85,7 @@ __all__ = [
     "GeneratorStepOutput",
     "GlobalStep",
     "GroupColumns",
+    "ConcatenateBranches",
     "JoinParallelBranches",
     "KeepColumns",
     "LoadDataFromDicts",
@@ -93,6 +95,7 @@ __all__ = [
     "LoadDataFromDataset",
     "LoadPydanticAsColumns",
     "ListToRows",
+    "Map",
     "MergeColumns",
     "MinHashDedup",
     "NoOp",

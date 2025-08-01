@@ -97,5 +97,5 @@ stages = [
     ),
 ]
 
-config = Config(stages=stages, debug_with_running_vllm=False)
+config = Config(stages=stages, use_running_vllm=False)
 

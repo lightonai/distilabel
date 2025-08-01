@@ -1,0 +1,12 @@
+Extract the {extraction_goal} from the page.
+
+Use the chain_of_thought section to consider the requirements of the goal carefully, it is a complex task. Break it down into parts (e.g. find the first word of the second sentence in the second to last paragraph breaks down into find the second to last paragraph, find the second sentence in that paragraph, find the first word of that sentence). 
+Do this and you can accurately accomplish the goal.
+Also use the chain_of_thought to ensure you are selecting the entirety of the text requested.
+
+Extract this verbatim.
+Here is the output format, provide nothing except this in your response:
+{{
+    "chain_of_thought": str,
+    "extraction": str,
+}}

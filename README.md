@@ -199,6 +199,8 @@ To directly contribute with `distilabel`, check our [good first issues](https://
       - Distiset level: controlled by `use_cache` and `invalidate_distiset` when calling `pipeline.run()`.
 - You can enable a function level timer with `DISTILABEL_ENABLE_TIMER=1`. You can decorate functions as shown in `distilabel/pipeline/base.py`.
 - At the end of the pipeline, `write_buffer.py` writes all the final batches to disk in parquets (writing every `constants.WRITE_BUFFER_SIZE` rows of data). Then it has to reload each of them to make sure they have a matching schema for the whole set. Then, they are loaded into a distiset and returned. This can take e.g. 10 min for 60K batches with 16M rows. Just note the time it takes.
+- You can set the base url for running vllm (used when `Config(use_running_vllm=True)` in the config) with the environment variable `VLLM_API_BASE_URL`.
+- You can use `uv` to make the environment. Simply use `uv sync` then `uv sync --extra flash` from the root dir of the repository. This should run the pipelines I have built though it may be missing dependencies for things like ray (which aren't supported atm anyways).
 
 ## Notes on Distilabel (Issues and Helpful Knowledge)
 - **Short Version**: distilabel is very particular about how things are done, so there's a reason why every line is the way it is and I recommend starting off of one of the existing pipelines. Also, reading my code for e.g. the single page pipeline will tell you how to build on top of distilabel. Use the rest of this list as an issue tracker so people know how to solve issues in the future.
@@ -235,6 +237,7 @@ To directly contribute with `distilabel`, check our [good first issues](https://
 - Route steps need to be 1-1 mappings (no dropping or adding rows to batches). Edit: I patched this, it should work.
 - You should still drop None after any LMGenerationTask step because there are other ways than sturctured generation to end up with a None in the response.
 - Say you generate multiple responses to some list of images, then split and later rejoin the images. If a response was a list with duplicates, then when split, the rows will be exact copies of each other and will trigger the warning in join parallel branches. Solution: use a smarter model.
+- The pipeline can crash and throw an error about not being able to pickle `_thread.lock`. In my case, this was due to not having pynvml installed and it crashed when trying to load the LMGenerationTask.
 
 ## Citation
 

@@ -168,6 +168,15 @@ def b64_encode_image(image: Image):
     img_str = base64.b64encode(buffered.getvalue()).decode('utf-8')
     return img_str
 
+def b64_decode_image(b64_string: str) -> Image.Image:
+    '''
+    Decode a base64 string back to a PIL Image
+    '''
+    img_data = base64.b64decode(b64_string)
+    buffered = io.BytesIO(img_data)
+    image = Image.open(buffered)
+    return image
+
 def msg_content_img(image: Image.Image):
     """Convert image to chat message dict with type image."""
     return {

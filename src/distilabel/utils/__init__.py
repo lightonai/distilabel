@@ -20,6 +20,7 @@ from .image import (
     get_image,
     downsample_image,
     b64_encode_image,
+    b64_decode_image,
     msg_content_img_url,
     msg_content_img_anthropic,
 )
@@ -35,6 +36,8 @@ from .misc import (
     pdf_name, 
     pdf_page,
     n_pages,
+    path_as_page,
+    page_path,
     generate_idx_to_filename,
     generate_field_to_idx,
     clear_dir,
@@ -47,7 +50,6 @@ from .misc import (
     sort_adjacent_pages,
     replace_source_col,
     randomize_source_order,
-    read_queue,
     save_jsonl,
     load_jsonl,
     hash_structure_with_images,
@@ -55,7 +57,12 @@ from .misc import (
     logical_not_filter,
     logical_and_filters,
     logical_or_filters,
+    get_pdf_paths,
+    count_all_pages,
+    not_empty_string,
 )
+
+from .cpe import continuous_parallel_execution
 
 # Timer
 from .timer import get_timer
@@ -68,6 +75,7 @@ __all__ = [
     "get_image",
     "downsample_image",
     "b64_encode_image",
+    "b64_decode_image",
     "msg_content_img_url",
     "msg_content_img_anthropic",
     
@@ -78,6 +86,8 @@ __all__ = [
     "pdf_name", 
     "pdf_page",
     "n_pages",
+    "path_as_page",
+    "page_path",
     "generate_idx_to_filename",
     "generate_field_to_idx",
     "clear_dir",
@@ -93,7 +103,6 @@ __all__ = [
     "sort_adjacent_pages",
     "replace_source_col",
     "randomize_source_order",
-    "read_queue",
     "save_jsonl",
     "load_jsonl",
     "hash_structure_with_images",
@@ -101,6 +110,10 @@ __all__ = [
     "logical_not_filter",
     "logical_and_filters",
     "logical_or_filters",
+    "get_pdf_paths",
+    "count_all_pages",
+    "continuous_parallel_execution",
+    "not_empty_string",
     # Timer
     "get_timer",
 ]

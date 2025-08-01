@@ -1,0 +1,14 @@
+Select a {sentence_or_paragraph} from the page at a height of roughly {height_percent} (10% is near the bottom and 90% is near the top).
+You can select from the main text, footnotes, captions, or any other text on the page matching the approximate given height.
+
+Please extract the selected {sentence_or_paragraph} verbatim and be extra careful not to miss anything or include errors in your transcription. 
+
+Use the chain_of_thought section to consider your selction before your final answer. 
+Use this to ensure you select from the appropriate height and that you know the full contents of the {sentence_or_paragraph}.
+Also ensure that you copy the full contents to the extraction.
+
+Here is the output format, provide nothing except this in your response:
+{{
+    "chain_of_thought": str,
+    "extraction": str,
+}}

@@ -46,25 +46,40 @@ def _format_one_input(args) -> 'ChatType':
         )
         return [{'role': 'system', 'content': ''}]
 
+    # converts the source col into a message in openai format (does downsampling and base64 encoding as well)
     messages.append(utils.source_to_msg(input['source'], max_dims, msg_content_img_func))
     
+    # 1. I allow prefixes for the lm_input_cols, so that you can say: 'description: {description_col}' or whatever
+    # 2. This code simply converts lm_input_cols into messages and adds the prefix
+    # also make this one user section because some models complain when roles don't alternate
+    prefixes_content = []
     if len(lm_input_col_prefixes) == 0:
         lm_input_col_prefixes = [''] * len(lm_input_cols)
     for col, prefix in zip(lm_input_cols, lm_input_col_prefixes):
         message = utils.source_to_msg(input[col], max_dims, msg_content_img_func)
         if isinstance(message['content'], str):
-            message['content'] = prefix + message['content']
+            prefixes_content.append({'type': 'text', 'text': prefix + message['content'] + '\n'})
         else:
-            messages.append({'role': 'user', 'content': prefix})
-        messages.append(message)
-    
+            prefixes_content.append({'type': 'text', 'text': prefix})
+            prefixes_content.extend(message['content'])
+
+    if len(prefixes_content) == 0:
+        return messages
+
+    if isinstance(messages[-1]['content'], list):
+        messages[-1]['content'].append({'type': 'text', 'text': prefixes_content})
+    elif isinstance(messages[-1]['content'], str):
+        messages[-1]['content'] = [{'type': 'text', 'text': messages[-1]['content']}, *prefixes_content]
+    else:
+        raise ValueError(f"Invalid content type: {type(messages[-1]['content'])}")
+
     return messages
 
 class VLM:
     stage: Stage = Field(default_factory=Stage, exclude=True)
     lm_config: LMConfig = Field(default_factory=LMConfig, exclude=True)
     prompt_sampler: PromptSampler | None = None
-    debug_with_running_vllm: bool = Field(default=False, exclude=True)
+    use_running_vllm: bool = Field(default=False, exclude=True)
 
     _vlm_logger = logging.getLogger(f"distilabel.vlm")
     _executor: "ProcessPoolExecutor | None" = PrivateAttr(default=None)
@@ -320,8 +335,9 @@ class OpenAILM(OpenAILLM, CudaDevicePlacementMixin, VLM):
 
             self._vllm_api = vLLMAPI(self.lm_config)
             self.base_url = f'http://localhost:{self._vllm_api.port}/v1'
-            if self.debug_with_running_vllm:
-                self.base_url = 'http://localhost:8000/v1'
+            if self.use_running_vllm:
+                base_url = os.environ.get('VLLM_API_BASE_URL', 'http://localhost:8000')
+                self.base_url = f'{base_url}/v1'
 
         # must come after the base_url is set properly
         super().load()
@@ -330,7 +346,7 @@ class OpenAILM(OpenAILLM, CudaDevicePlacementMixin, VLM):
         CudaDevicePlacementMixin.load(self)
         
         # must come after CUDA_VISIBLE_DEVICES is set properly
-        if self.use_vllm and not self.debug_with_running_vllm:
+        if self.use_vllm and not self.use_running_vllm:
             # I want this to throw an error because the visible devices should be set by the placement mixin
             gpu = os.environ['CUDA_VISIBLE_DEVICES'].split(',')[0]
             self._vllm_api.gpu = gpu

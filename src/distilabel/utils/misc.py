@@ -17,6 +17,9 @@ from typing import Callable, List, Any
 from datasets import Dataset
 from pathlib import Path
 from copy import deepcopy
+import pypdfium2 as pdfium
+import multiprocessing as mp
+from tqdm import tqdm
 
 from .image import get_image, downsample_image, b64_encode_image
 
@@ -71,8 +74,19 @@ def pdf_page(page):
     return int(page[page.rfind('_page_') + 6:page.rfind('.pdf')])
 
 def path_as_page(path, page):
-    '''Return the page filename from a path and page number'''
+    '''
+    Return the page filename from a path and page number. 
+    Only works for page filenames, can't take the filename directly.
+    If you have the pdf filename, use page_path instead.
+    '''
     return path[:path.rfind('_page_')] + f'_page_{page}.pdf'
+
+def page_path(path, page):
+    '''
+    Return the page filename from a pdf filename and page number.
+    If you have the page filename, use path_as_page instead.
+    '''
+    return path[:path.rfind('.pdf')] + f'_page_{page}.pdf'
 
 def n_pages(path):
     '''Return the number of pages in a pdf'''
@@ -268,6 +282,9 @@ def generation_is_structured(row: dict, cols: list[str]) -> bool:
     '''Bool indicator of whether any of the cols are None'''
     return all([row[col] is not None for col in cols])
 
+def not_empty_string(row: dict, cols: list[str]) -> bool:
+    return all([row[col] != '' for col in cols])
+
 def cols_true(row: dict, cols: list[str]) -> bool:
     '''Bool indicator of whether all of the cols are True'''
     return all([row[col] for col in cols])
@@ -310,11 +327,11 @@ def is_openai_model_name(model_name: str) -> bool:
     """
     return bool(re.search(r'(gpt|o\d.*)', model_name, re.IGNORECASE))
 
-def source_to_msg(source: str | list[str] | None, max_dims: tuple[int, int], msg_content_img: Callable) -> dict:
+def source_to_msg(source: str | list[str | Image.Image] | None, max_dims: tuple[int, int], msg_content_img: Callable) -> dict:
     '''
     Convert a source into an openai message.
     
-    A source is a string directly for input, or a list of paths to images or pdf pages.
+    A source is a string directly for input, or a list of either paths to images or pdf pages or direct PIL Images.
     '''
     if isinstance(source, str):
         # Text source
@@ -322,8 +339,13 @@ def source_to_msg(source: str | list[str] | None, max_dims: tuple[int, int], msg
     elif isinstance(source, list):
         # Image source (list of paths)
         content = []
-        for path in source:
-            img = get_image(None, path)
+        for item in source:
+            if isinstance(item, str):
+                img = get_image(None, item)
+            elif isinstance(item, Image.Image):
+                img = item
+            else:
+                continue
             img = downsample_image(img, max_dims)
             b64_img = b64_encode_image(img)
             content.append(msg_content_img(b64_img))
@@ -339,9 +361,79 @@ def clean_structured_output(output: str | None) -> str | None:
     output = output.replace('```json', '').replace('```', '')
     return output
 
-def read_queue(queue: Queue, lock: Any) -> List:
-    with lock:
-        contents = [queue.get() for _ in range(queue.qsize())]
-        for batch in contents:
-            queue.put(batch)
-    return contents
+def _get_pdf_paths_from_disk(pdf_root: Path | str, limit: int | None = None):
+    """
+    Walks directories to find all PDF paths.
+    Can stop early if a limit is provided. The limit is roughly obeyed.
+    """
+    paths = []
+    for subdir in Path(pdf_root).iterdir():
+        for root, _, files in os.walk(subdir):
+            for file in files:
+                if file.endswith(".pdf"):
+                    paths.append(os.path.join(root, file))
+            
+            if limit and len(paths) >= limit:
+                return paths
+    return paths
+
+def get_pdf_paths(pdf_root: Path | str, cache_dir: Path | str = 'out'):
+    '''
+    Gets all PDF paths, using a cache file to speed up subsequent runs.
+    '''
+    pdf_paths_cache = Path(cache_dir) / 'pdf_paths_cache.txt'
+    if pdf_paths_cache.exists():
+        with open(pdf_paths_cache, 'r') as f:
+            return [line.strip() for line in f]
+
+    paths = _get_pdf_paths_from_disk(pdf_root)
+
+    os.makedirs(cache_dir, exist_ok=True)
+    with open(pdf_paths_cache, 'w') as f:
+        for p in paths:
+            f.write(f"{p}\n")
+    return paths
+
+def get_page_count(pdf_path: str) -> tuple[str, int]:
+    """Get the number of pages in a PDF."""
+    try:
+        return pdf_path, len(pdfium.PdfDocument(pdf_path))
+    except Exception:
+        return pdf_path, 0
+
+def count_all_pages(
+    pdf_root: Path | str,
+    cache_dir: Path | str = 'out',
+    n_jobs: int = 16,
+    limit: int | None = None,
+):
+    '''
+    Count the number of pages in all PDFs in a directory.
+
+    pdf_root: root directory of the pdfs
+    cache_dir: directory to cache the pdf paths
+    n_jobs: number of jobs to use for counting pages
+    limit: limit the number of pdfs to count pages for (for testing)
+
+    Returns:
+        dict of pdf_path to page_count
+    '''
+    path_to_page_count_path = pth(cache_dir) / 'path_to_page_count.json'
+    if path_to_page_count_path.exists():
+        return load_json(path_to_page_count_path)
+    
+    if limit:
+        pdf_paths = _get_pdf_paths_from_disk(pdf_root, limit)
+    else:
+        pdf_paths = get_pdf_paths(pdf_root, cache_dir)
+    with mp.Pool(n_jobs) as pool:
+        page_counts_iterator = pool.imap_unordered(get_page_count, pdf_paths)
+        path_to_page_count = {
+            pdf_path: page_count
+            for pdf_path, page_count in tqdm(page_counts_iterator, desc='Counting pages', total=len(pdf_paths))
+            if page_count > 0
+        }
+    
+    save_json(path_to_page_count_path, path_to_page_count)
+    return path_to_page_count
+
