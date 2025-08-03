@@ -327,7 +327,12 @@ def is_openai_model_name(model_name: str) -> bool:
     """
     return bool(re.search(r'(gpt|o\d.*)', model_name, re.IGNORECASE))
 
-def source_to_msg(source: str | list[str | Image.Image] | None, max_dims: tuple[int, int], msg_content_img: Callable) -> dict:
+def source_to_msg(
+    source: str | list[str | Image.Image] | None, 
+    max_dims: tuple[int, int], 
+    msg_content_img: Callable,
+    path_substitution: tuple[str, str] | None = None,
+) -> dict:
     '''
     Convert a source into an openai message.
     
@@ -341,7 +346,7 @@ def source_to_msg(source: str | list[str | Image.Image] | None, max_dims: tuple[
         content = []
         for item in source:
             if isinstance(item, str):
-                img = get_image(None, item)
+                img = get_image(None, item, path_substitution)
             elif isinstance(item, Image.Image):
                 img = item
             else:
@@ -359,6 +364,7 @@ def clean_structured_output(output: str | None) -> str | None:
     if output is None:
         return None
     output = output.replace('```json', '').replace('```', '')
+    output = output[output.find('{'):]
     return output
 
 def _get_pdf_paths_from_disk(pdf_root: Path | str, limit: int | None = None):
@@ -436,4 +442,11 @@ def count_all_pages(
     
     save_json(path_to_page_count_path, path_to_page_count)
     return path_to_page_count
+
+def remove_pdfs_from_dataset(dataset: Dataset, exclude_pdfs: set[str], row_to_ifn: Callable | None = None):
+    '''
+    Remove all image filenames that are from pdfs in the exclude_pdfs set
+    row_to_ifn is a function that takes a row and returns the pdf name, defaults to pdf_name
+    '''
+    return dataset.filter(lambda x: pdf_name(row_to_ifn(x) if row_to_ifn else x['image_filename']) not in exclude_pdfs)
 

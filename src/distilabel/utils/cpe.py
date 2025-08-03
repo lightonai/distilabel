@@ -2,6 +2,7 @@ from typing import Callable, Iterable, Iterator, Generator, Any
 import concurrent
 from tqdm import tqdm
 import itertools
+import traceback
 
 def _shortened_task(task: dict) -> dict:
     """Limit printing."""
@@ -89,6 +90,7 @@ def continuous_parallel_execution(  # noqa: PLR0913
                     result = future.result()
                 except Exception as e:
                     print(f"Error processing task {_shortened_task(task)}: {e}")
+                    print(f"Traceback: {traceback.format_exc()}")
                     result = None
                 yield task, result
 

@@ -31,6 +31,7 @@ def _format_one_input(args) -> 'ChatType':
         system_prompt,
         lm_input_cols,
         lm_input_col_prefixes,
+        path_substitution,
         max_dims,
         msg_content_img_func,
         logger,
@@ -47,7 +48,14 @@ def _format_one_input(args) -> 'ChatType':
         return [{'role': 'system', 'content': ''}]
 
     # converts the source col into a message in openai format (does downsampling and base64 encoding as well)
-    messages.append(utils.source_to_msg(input['source'], max_dims, msg_content_img_func))
+    messages.append(
+        utils.source_to_msg(
+            input['source'], 
+            max_dims, 
+            msg_content_img_func, 
+            path_substitution,
+        )
+    )
     
     # 1. I allow prefixes for the lm_input_cols, so that you can say: 'description: {description_col}' or whatever
     # 2. This code simply converts lm_input_cols into messages and adds the prefix
@@ -56,7 +64,12 @@ def _format_one_input(args) -> 'ChatType':
     if len(lm_input_col_prefixes) == 0:
         lm_input_col_prefixes = [''] * len(lm_input_cols)
     for col, prefix in zip(lm_input_cols, lm_input_col_prefixes):
-        message = utils.source_to_msg(input[col], max_dims, msg_content_img_func)
+        message = utils.source_to_msg(
+            input[col], 
+            max_dims, 
+            msg_content_img_func, 
+            path_substitution,
+        )
         if isinstance(message['content'], str):
             prefixes_content.append({'type': 'text', 'text': prefix + message['content'] + '\n'})
         else:
@@ -84,24 +97,35 @@ class VLM:
     _vlm_logger = logging.getLogger(f"distilabel.vlm")
     _executor: "ProcessPoolExecutor | None" = PrivateAttr(default=None)
 
-    def format_input(self, input: dict, lm_input_cols: list[str], lm_input_col_prefixes: list[str]) -> 'ChatType':
-        system = self.prompt_sampler.generate_prompt()
+    def format_input(self, input: dict, system_col: str | None, lm_input_cols: list[str], lm_input_col_prefixes: list[str]) -> 'ChatType':
+        system = self.prompt_sampler.generate_prompt() if system_col is None else input[system_col]
         input |= {'system': system}  # inplace update the input to sneak it into the format_output of LMGenerationTask
         return _format_one_input((
             input,
             system,
             lm_input_cols,
             lm_input_col_prefixes,
+            self.lm_config.path_substitution,
             self.stage.max_dims,
             VLM.msg_content_img,
             self._vlm_logger,
         ))
 
-    def parallel_format_inputs(self, inputs: list[dict], lm_input_cols: list[str], lm_input_col_prefixes: list[str]) -> list['ChatType']:
+    def parallel_format_inputs(
+        self,
+        inputs: list[dict],
+        system_col: str | None,
+        lm_input_cols: list[str],
+        lm_input_col_prefixes: list[str],
+    ) -> list['ChatType']:
         '''
         Format input serially is a big bottleneck due probably to image loading. Parallelizing this is great for throughput.
         '''
-        prompts = [self.prompt_sampler.generate_prompt() for _ in inputs]
+        prompts = [
+            self.prompt_sampler.generate_prompt() 
+            if system_col is None else inputs[i][system_col] 
+            for i in range(len(inputs))
+        ]
         for inp, system in zip(inputs, prompts):
             inp |= {'system': system}  # inplace update the input to sneak it into the format_output of LMGenerationTask
         
@@ -111,15 +135,13 @@ class VLM:
                 system_prompt,
                 lm_input_cols,
                 lm_input_col_prefixes,
+                self.lm_config.path_substitution,
                 self.stage.max_dims,
                 VLM.msg_content_img,
                 self._vlm_logger
             )
             for input_data, system_prompt in zip(inputs, prompts)
         ]
-        
-        if self._executor is None:
-            raise DistilabelError("ProcessPoolExecutor not initialized. Make sure to call `load()`.")
 
         return list(self._executor.map(_format_one_input, tasks))
 
@@ -367,7 +389,6 @@ class OpenAILM(OpenAILLM, CudaDevicePlacementMixin, VLM):
     async def agenerate(
         self, 
         input: FormattedInput,
-        num_generations: int = 1,  # handled by the decorator
         max_new_tokens: int = 128,
         temperature: float = 1.0,
         extra_body: dict[str, Any] | None = None,

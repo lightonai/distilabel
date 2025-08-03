@@ -1,0 +1,8 @@
+Count the number of {object} in the page.
+Use the chain_of_thought section to list each instance explicitly, then count all of these for your final answer.
+
+Here is the output format, provide nothing outside of this in your response:
+{{
+    "chain_of_thought": str,
+    "count": int,
+}}

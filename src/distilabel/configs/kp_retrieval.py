@@ -1,4 +1,5 @@
 import dotenv
+from pathlib import Path
 dotenv.load_dotenv()
 
 from distilabel.pydantics import (
@@ -15,33 +16,28 @@ pos_extraction_ps = PromptSamplerConfig(
     distributions={
         'extraction_goal': CategoricalDist(
             choices=[
-                ('first sentence', 2),
-                ('second sentence', 2),
-                ('third sentence', 2),
-                ('last sentence', 2),
-                ('second from last (meaning the one right before the last one) sentence', 2),
-                ('first sentence of the first paragraph (paragraphs separated by \n\n and excluding headers)', 2),
-                ('second sentence of the first paragraph (paragraphs separated by \n\n and excluding headers)', 2),
-                ('third sentence of the first paragraph (paragraphs separated by \n\n and excluding headers)', 2),
-                ('last sentence of the first paragraph (paragraphs separated by \n\n and excluding headers)', 2),
-                ('first sentence of the second paragraph (paragraphs separated by \n\n and excluding headers)', 2),
-                ('second sentence of the second paragraph (paragraphs separated by \n\n and excluding headers)', 2),
-                ('third sentence of the second paragraph (paragraphs separated by \n\n and excluding headers)', 2),
-                ('last sentence of the second paragraph (paragraphs separated by \n\n and excluding headers)', 2),
-                ('first sentence of the third paragraph (paragraphs separated by \n\n and excluding headers)', 2),
-                ('second sentence of the third paragraph (paragraphs separated by \n\n and excluding headers)', 2),
-                ('third sentence of the third paragraph (paragraphs separated by \n\n and excluding headers)', 2),
-                ('last sentence of the third paragraph (paragraphs separated by \n\n and excluding headers)', 2),
-                ('first sentence of the last paragraph (paragraphs separated by \n\n and excluding headers)', 2),
-                ('second sentence of the last paragraph (paragraphs separated by \n\n and excluding headers)', 2),
-                ('third sentence of the last paragraph (paragraphs separated by \n\n and excluding headers)', 2),
-                ('last sentence of the last paragraph (paragraphs separated by \n\n and excluding headers)', 2),
-                ('first sentence of the second from last (meaning the one right before the last one) paragraph (paragraphs separated by \n\n and excluding headers)', 2),
-                ('second sentence of the second from last (meaning the one right before the last one) paragraph (paragraphs separated by \n\n and excluding headers)', 2),
-                ('last sentence of the second from last (meaning the one right before the last one) paragraph (paragraphs separated by \n\n and excluding headers)', 2),
+                ('first sentence (not including headers and separated specifically by periods)', 2),
+                ('second sentence (not including headers and separated specifically by periods)', 2),
+                ('third sentence (not including headers and separated specifically by periods)', 2),
+                ('last sentence (not including headers and separated specifically by periods)', 2),
+                ('second from last (meaning the one right before the last one) sentence (not including headers and separated specifically by periods)', 2),
+                ('first sentence (not including headers and separated specifically by periods) of the first paragraph (paragraphs separated by \n\n and excluding headers)', 2),
+                ('second sentence (not including headers and separated specifically by periods) of the first paragraph (paragraphs separated by \n\n and excluding headers)', 2),
+                ('third sentence (not including headers and separated specifically by periods) of the first paragraph (paragraphs separated by \n\n and excluding headers)', 2),
+                ('last sentence (not including headers and separated specifically by periods) of the first paragraph (paragraphs separated by \n\n and excluding headers)', 2),
+                ('first sentence (not including headers and separated specifically by periods) of the second paragraph (paragraphs separated by \n\n and excluding headers)', 2),
+                ('second sentence (not including headers and separated specifically by periods) of the second paragraph (paragraphs separated by \n\n and excluding headers)', 2),
+                ('third sentence (not including headers and separated specifically by periods) of the second paragraph (paragraphs separated by \n\n and excluding headers)', 2),
+                ('last sentence (not including headers and separated specifically by periods) of the second paragraph (paragraphs separated by \n\n and excluding headers)', 2),
+                ('first sentence (not including headers and separated specifically by periods) of the last paragraph (paragraphs separated by \n\n and excluding headers)', 2),
+                ('second sentence (not including headers and separated specifically by periods) of the last paragraph (paragraphs separated by \n\n and excluding headers)', 2),
+                ('third sentence (not including headers and separated specifically by periods) of the last paragraph (paragraphs separated by \n\n and excluding headers)', 2),
+                ('last sentence (not including headers and separated specifically by periods) of the last paragraph (paragraphs separated by \n\n and excluding headers)', 2),
+                ('first sentence (not including headers and separated specifically by periods) of the second from last (meaning the one right before the last one) paragraph (paragraphs separated by \n\n and excluding headers)', 2),
+                ('second sentence (not including headers and separated specifically by periods) of the second from last (meaning the one right before the last one) paragraph (paragraphs separated by \n\n and excluding headers)', 2),
+                ('last sentence (not including headers and separated specifically by periods) of the second from last (meaning the one right before the last one) paragraph (paragraphs separated by \n\n and excluding headers)', 2),
                 ('first paragraph (paragraphs separated by \n\n and excluding headers)', 4),
                 ('second paragraph (paragraphs separated by \n\n and excluding headers)', 4),
-                ('third paragraph (paragraphs separated by \n\n and excluding headers)', 4),
                 ('last paragraph (paragraphs separated by \n\n and excluding headers)', 4),
                 ('second from last (meaning the one right before the last one) paragraph (paragraphs separated by \n\n and excluding headers)', 4),
             ],
@@ -141,9 +137,12 @@ lm_configs_1=[
     ),
 ]
 
+EXCLUDE_PDFS = set(Path('/mnt/nfs/austin_shared/mp_data_gen/bench_pdfs.txt').read_text().splitlines())
 AVAILABLE_GPUS = [2, 3]
 DS_PATH = '/mnt/nfs/austin_shared/mp_data_gen/out/scraped_v0.3_with_txt_img_neg_references_filtered'
+IMAGES_DS_PATH = '/mnt/nfs/austin_shared/mp_data_gen/out/all_pdfs_images'
 PDF_ROOT = '/mnt/nfs/pdfs'
+CACHE_DIR = 'out'
 
 stages = [
     # Stage 0: Transcribe the page
@@ -159,5 +158,5 @@ stages = [
     ),
 ]
 
-config = Config(stages=stages, use_running_vllm=False)
+config = Config(stages=stages, use_running_vllm=True)
 

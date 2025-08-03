@@ -73,6 +73,11 @@ class LMConfig(BaseModel):
     lm_response_cache_root: pth = Field(default_factory=pth)
     '''root directory for the lm response cache, set by the step when created'''
 
+    path_substitution: tuple[str, str] | None = None
+    '''
+    if a tuple, will call str.replace(substitution[0], substitution[1]) on any paths in the source column
+    '''
+
     def model_post_init(self, context) -> None:
         if isinstance(self.out_model, str):
             self.out_model = getattr(sys.modules[__name__], self.out_model)
@@ -119,6 +124,8 @@ class Config(BaseModel):
     if True, all vllm models will expect to be able to call a pre-running model on port 8000.
     
     This is useful for debugging, when you don't want to pay for proprietary models or start a vllm server on launch
+    You can also set the VLLM_API_BASE_URL environment variable to the base url of the vllm server and set up e.g. multi-node vllm servers
+    behind an nginx proxy to scale to multiple nodes
     '''
 
 class CoT(BaseModel):
@@ -165,3 +172,6 @@ class KeyExtraction(CoT):
 
 class PosExtraction(CoT):
     extraction: str
+
+class ThinkingCount(CoT):
+    count: int

@@ -1,6 +1,5 @@
 import random
-import re
-import random
+from pathlib import Path
 
 from distilabel.pipeline import Pipeline
 from datasets import load_from_disk, Dataset
@@ -19,12 +18,12 @@ from distilabel.steps.tasks import (
     LMGenerationTask,
 )
 
-from distilabel.utils.kp_retrieval_utils import format_distiset
+from distilabel.utils.pipelines.kp_retrieval_utils import format_distiset
 from distilabel.pydantics import Config
 from distilabel import utils
 import distilabel.utils.pipe_utils as pipe_utils
 
-from distilabel.configs.kp_retrieval import config, DS_PATH
+from distilabel.configs.kp_retrieval import config, DS_PATH, CACHE_DIR, EXCLUDE_PDFS
 
 def slice_key(key_extraction: str, **kwargs) -> str:
     '''Take key (key_selection) as a random slice of the target to extract (key_extraction)'''
@@ -45,7 +44,7 @@ def get_ds(n: int) -> Dataset:
     dataset = dataset.shuffle(seed=0)
     dataset = dataset.select(range(n))
     dataset = dataset.map(lambda x: {'source': [x['image_filename']]})
-    dataset = dataset.select_columns(['source'])
+    dataset = dataset.select_columns(['source', 'hard_negs_idx_img_img', 'hard_negs_idx_txt_img'])
     return dataset
 
 STAGE = 0
@@ -59,13 +58,14 @@ def run_pipeline(config: Config):
     stages = config.stages
     # dataset = get_ds(2_000_000)
     dataset = get_ds(16)
+    dataset = utils.remove_pdfs_from_dataset(dataset, EXCLUDE_PDFS)
 
     with Pipeline(
         name='kp_retrieval',
         description=(
             'Generate questions that ask the model to retrieve content from a page given a specific location or key.'
         ),
-        cache_dir='out/kp_retrieval',
+        cache_dir=Path(CACHE_DIR) / 'kp_retrieval',
     ) as pipeline:
         ################## STAGE 0: TRANSCRIBE THE PAGE ##################
         stage = stages[STAGE]
@@ -186,6 +186,7 @@ def run_pipeline(config: Config):
             cols=[
                 'key_extraction_system', 'pos_extraction_system',
                 'key_selection', 'key_extraction', 'pos_extraction', 'md', 'img_source',
+                'hard_negs_idx_img_img', 'hard_negs_idx_txt_img',
             ],
             input_batch_size=BATCH_SIZE,
         )
@@ -230,7 +231,7 @@ def run_pipeline(config: Config):
             )
         ),
         use_cache=True,
-        invalidate_distiset=True,
+        invalidate_distiset=False,
     )
     return distiset
 
@@ -238,5 +239,5 @@ if __name__ == '__main__':
     distiset: Dataset = run_pipeline(config)['default']['train']
     distiset = distiset.remove_columns(['distilabel_metadata'])  # don't need this for this pipeline
     distiset, images_ds = format_distiset(distiset)
-    distiset.save_to_disk('out/kp_retrieval_ds')
-    images_ds.save_to_disk('out/all_pdfs_images')
+    distiset.save_to_disk(Path(CACHE_DIR) / 'kp_retrieval_ds')
+    images_ds.save_to_disk(Path(CACHE_DIR) / 'all_pdfs_images')

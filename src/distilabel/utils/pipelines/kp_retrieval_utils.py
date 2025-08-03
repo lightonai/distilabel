@@ -1,14 +1,9 @@
 import re
-from datasets import Dataset
-from collections import defaultdict
-from difflib import SequenceMatcher
-import time
-
-from distilabel.prompt_sampler import PromptSampler
-from distilabel.configs.kp_retrieval import key_extraction_ps
+import random
+from datasets import Dataset, load_from_disk
 
 from distilabel import utils
-from distilabel.configs.kp_retrieval import PDF_ROOT
+from distilabel.configs.kp_retrieval import PDF_ROOT, DS_PATH, CACHE_DIR
 
 def update_hn_idxs(dataset: Dataset, distiset: Dataset) -> Dataset:
     '''
@@ -44,19 +39,32 @@ def build_images_ds(fn_to_page_count: dict[str, int]) -> tuple[Dataset, dict[str
 
 fn_to_page_count: dict[str, int] = None
 fn_to_idx: dict[str, int] = None
+dataset_idx_to_fn: dict[int, str] = None
 
-def convert_to_vision(row: dict, **kwargs) -> dict:
+def convert_to_vision(row: dict, use_hn: bool = False, **kwargs) -> dict:
     '''
     Convert the row to vision format
 
     For key retrieval, the task is to retrieve text before or after a given key.
     For pos retrieval, the task is to retrieve text described by a page number and page relative location (like 'the first sentence in the second from last paragraph from page 2')
     '''
-    global fn_to_page_count, fn_to_idx
+    global fn_to_page_count, fn_to_idx, dataset_idx_to_fn
+    random.seed(kwargs['idx'])
     ifn = row['source'][0]
     pdf_name = utils.pdf_name(ifn)
-    n_pages = fn_to_page_count[pdf_name]
-    image_indices = [fn_to_idx[utils.path_as_page(ifn, i)] for i in range(n_pages)]
+    if use_hn:
+        negs = row['hard_negs_idx_img_img'] + row['hard_negs_idx_txt_img']
+        negs = random.sample(negs, k=random.randint(5, min(len(negs), 63)))
+        image_indices = [
+            fn_to_idx[dataset_idx_to_fn[neg]] for neg in negs
+        ]
+        key_page = random.randint(0, len(image_indices))
+        image_indices.insert(key_page, fn_to_idx[ifn])
+        n_pages = len(image_indices)
+    else:
+        n_pages = fn_to_page_count[pdf_name]
+        key_page = utils.pdf_page(ifn)
+        image_indices = [fn_to_idx[utils.path_as_page(ifn, i)] for i in range(n_pages)]
 
     if row['key_extraction_system'] is not None:
         system_prompt = row['key_extraction_system']
@@ -78,7 +86,7 @@ def convert_to_vision(row: dict, **kwargs) -> dict:
         # going to use 1-indexed pages to teach this capability
         user_content = (
             "".join([f"Page {i + 1}:<IMG_{i}>" for i in range(n_pages)])
-            + f"Extract the {extraction_goal} from page {utils.pdf_page(ifn) + 1}."
+            + f"Extract the {extraction_goal} from page {key_page + 1}."
         )
         assistant_content = row['pos_extraction']
     messages = [
@@ -95,12 +103,15 @@ def format_distiset(distiset: Dataset) -> Dataset:
     '''
     Format the distiset to vision format/build actual examples from extractions
     '''
-    global fn_to_page_count, fn_to_idx
+    global fn_to_page_count, fn_to_idx, dataset_idx_to_fn
     fn_to_page_count = utils.count_all_pages(
         pdf_root=PDF_ROOT,
-        cache_dir='out/kp_retrieval',
+        cache_dir=CACHE_DIR,
         n_jobs=16,
     )
+    
+    dataset = load_from_disk(DS_PATH)
+    dataset_idx_to_fn = utils.generate_idx_to_filename(dataset)
 
     # build images ds out of fn_to_page_count, as doing this, build map from fn to idx in images ds
     images_ds, fn_to_idx = build_images_ds(fn_to_page_count)
@@ -108,20 +119,25 @@ def format_distiset(distiset: Dataset) -> Dataset:
         [
             'key_extraction_system', 'pos_extraction_system',
             'key_selection', 'key_extraction', 'pos_extraction', 'md', 'source',
+            'hard_negs_idx_img_img', 'hard_negs_idx_txt_img',
         ]
     ).to_list()
 
     tqdm_desc = "Processing Tasks"
     cpe = utils.continuous_parallel_execution(
         function=convert_to_vision,
-        tasks=[{'row': row, 'idx': idx} for idx, row in enumerate(distiset)],
-        task_count=len(distiset),
+        tasks=[
+            {'row': row, 'idx': idx} for idx, row in enumerate(distiset)
+        ] + [
+            {'row': row, 'idx': idx + len(distiset), 'use_hn': True} for idx, row in enumerate(distiset)
+        ],
+        task_count=len(distiset) * 2,
         process_type="process",
         num_workers=16,
         max_active_tasks=1024,
         tqdm_desc=tqdm_desc,
     )
-    vision_ds = [None] * len(distiset)
+    vision_ds = [None] * (len(distiset) * 2)
     for task, result in cpe:
         vision_ds[task['idx']] = result
 

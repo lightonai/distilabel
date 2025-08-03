@@ -21,12 +21,14 @@ class LMGenerationTask(Task):
 
     Args:
     ---
+        system_col: column to use for the system prompt, if specified, replaces sampling from the lm_config.system_template_path
         lm_input_cols: extra columns to include in the messages to the LM, postfixed in order 
         lm_input_col_prefixes: prefixes to prepend to the lm_input_cols (e.g. 'reference answer: ')
         extra_cols: extra columns for the step to know about for input or output mappings
     '''
     stage: Stage = Field(default_factory=Stage, exclude=True)
     lm_config: LMConfig = Field(default_factory=LMConfig, exclude=True)
+    system_col: str | None = None
     lm_input_cols: list[str] = []
     lm_input_col_prefixes: list[str] = []
     input_formatter: Callable = Field(default=lambda **kwargs: kwargs, exclude=True)
@@ -65,13 +67,13 @@ class LMGenerationTask(Task):
         return ['source', 'model_name', *self.pydantic_fields, 'system'] + self.extra_cols
 
     def format_input(self, input: dict) -> 'ChatType':
-        return self.input_formatter(input, self.lm_input_cols, self.lm_input_col_prefixes)
+        return self.input_formatter(input, self.system_col, self.lm_input_cols, self.lm_input_col_prefixes)
 
     def can_parallel_format_inputs(self) -> bool:
         return self.parallel_input_formatter is not None
 
     def parallel_format_inputs(self, inputs: list[dict]) -> list['ChatType']:
-        return self.parallel_input_formatter(inputs, self.lm_input_cols, self.lm_input_col_prefixes)
+        return self.parallel_input_formatter(inputs, self.system_col, self.lm_input_cols, self.lm_input_col_prefixes)
 
     def format_output(self, output: str | None, input: dict) -> dict:
         pydantic_output = {'generation': output}

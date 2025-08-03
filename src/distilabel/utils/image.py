@@ -89,25 +89,51 @@ def load_from_pdf(filename: str | pth, pdf_backend: str = "pdfium") -> Image.Ima
     message = "Invalid pdf_backend. Choose 'pdf2image' or 'pdfium'."
     raise ValueError(message)
 
-def load_from_filename(filename: str):
+def load_from_filename(
+    filename: str, 
+    crop: dict[str, int] | None = None,
+    path_substitution: tuple[str, str] | None = None,
+):
     """
     Loads an image based on a filename which includes the page as shown below
 
     Works for pdfs or jpgs/pngs and will load the jpg/png image if it exists for improved speed
 
     See load_from_pdf() for pdf filename format
+
+    crop is an optional dict with keys from ['top', 'bottom', 'left', 'right']
+    which can specify a percent of the image to crop off the top, bottom, left, or right
     """
+    if path_substitution is not None:
+        filename = str(filename).replace(
+            path_substitution[0],
+            path_substitution[1],
+        )
     filename = pth(filename)
     if filename.with_suffix('.jpg').exists():
-        return Image.open(filename.with_suffix('.jpg'))
+        image = Image.open(filename.with_suffix('.jpg'))
     elif filename.with_suffix('.png').exists():
-        return Image.open(filename.with_suffix('.png'))
+        image = Image.open(filename.with_suffix('.png'))
     elif filename.suffix == '.pdf':
-        return load_from_pdf(filename)
+        image = load_from_pdf(filename)
     else:
         raise NotImplementedError(f'suffix for {filename=} is not supported')
+    
+    if crop is not None:
+        w, h = image.size
+        image = image.crop((
+            crop['left'] * w,
+            crop['top'] * h,
+            (1 - crop['right']) * w,
+            (1 - crop['bottom']) * h,
+        ))
+    return image
 
-def get_image(ds: Dataset | None, image_ptr: str | int):
+def get_image(
+    ds: Dataset | None, 
+    image_ptr: str | int,
+    path_substitution: tuple[str, str] | None = None,
+):
     '''
     This will load an image as a PIL Image from your dataset or a pdf or a jpg outside the dataset
 
@@ -134,9 +160,16 @@ def get_image(ds: Dataset | None, image_ptr: str | int):
         assert isinstance(image_ptr, str)
     try:
         if isinstance(image_ptr, str):
-            return load_from_filename(image_ptr)
+            return load_from_filename(
+                image_ptr, 
+                path_substitution=path_substitution,
+            )
         elif isinstance(image_ptr, int) and ds[image_ptr]["image"] is None:
-            return load_from_filename(ds[image_ptr]["image_filename"])
+            return load_from_filename(
+                ds[image_ptr]["image_filename"], 
+                crop=ds[image_ptr].get('crop'), 
+                path_substitution=path_substitution,
+            )
         else:
             return ds[image_ptr]["image"]
     except NotImplementedError as exc:
