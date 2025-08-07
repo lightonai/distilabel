@@ -61,6 +61,7 @@ from .misc import (
     count_all_pages,
     not_empty_string,
     remove_pdfs_from_dataset,
+    remove_pdfs_with_pages_,
 )
 
 from .cpe import continuous_parallel_execution
@@ -116,6 +117,7 @@ __all__ = [
     "continuous_parallel_execution",
     "not_empty_string",
     "remove_pdfs_from_dataset",
+    "remove_pdfs_with_pages_",
     # Timer
     "get_timer",
 ]

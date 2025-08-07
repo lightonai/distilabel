@@ -22,15 +22,16 @@ from distilabel.utils.pipelines.fill_in_middle_utils import format_distiset
 from distilabel.pydantics import Config
 from distilabel import utils
 import distilabel.utils.pipe_utils as pipe_utils
-from distilabel.configs.fill_in_middle import config, DS_PATH, CACHE_DIR, EXCLUDE_PDFS
+from distilabel.configs.fill_in_middle import config, DS_PATH, PDF_ROOT, CACHE_DIR, EXCLUDE_PDFS
 
 def get_ds(n: int) -> Dataset:
     dataset = load_from_disk(DS_PATH)
     dataset = dataset.shuffle(seed=0)
     # this way we are taking different ones from kp_retrieval, 
     # with flexibility for value of n until that is high enough they overlap
-    dataset = dataset.select(range(len(dataset) - n, len(dataset)))
-    dataset = dataset.map(lambda x: {'source': [x['image_filename']]})
+    # hacking in additional values while maintaining the order of the first 2_000_000 for getting the cache
+    dataset = dataset.select(list(range(len(dataset) - n, len(dataset))) + list(range(len(dataset) - 10_000_000, len(dataset) - n)))
+    dataset = dataset.map(lambda x: {'source': [x['image_filename']]}, num_proc=64)
     dataset = dataset.select_columns(['source'])
     return dataset
 
@@ -43,9 +44,10 @@ def run_pipeline(config: Config):
     random.seed(0)
     
     stages = config.stages
-    # dataset = get_ds(2_000_000)
-    dataset = get_ds(16)
-    dataset = utils.remove_pdfs_from_dataset(dataset, EXCLUDE_PDFS)
+    dataset = get_ds(2_000_000)
+    # dataset = get_ds(16)
+    dataset = utils.remove_pdfs_from_dataset(dataset, EXCLUDE_PDFS, row_to_ifn=lambda row: row['source'][0])
+    dataset = utils.remove_pdfs_with_pages_(dataset, PDF_ROOT, CACHE_DIR, less_than=3, row_to_ifn=lambda row: row['source'][0])
 
     with Pipeline(
         name='fill_in_middle',
@@ -100,7 +102,7 @@ def run_pipeline(config: Config):
             )
         ),
         use_cache=True,
-        invalidate_distiset=False,
+        invalidate_distiset=True,
     )
     return distiset
 
@@ -108,4 +110,4 @@ if __name__ == '__main__':
     distiset: Dataset = run_pipeline(config)['default']['train']
     distiset = distiset.remove_columns(['distilabel_metadata'])  # don't need this for this pipeline
     distiset = format_distiset(distiset)
-    distiset.save_to_disk('out/fill_in_middle_ds')
+    distiset.save_to_disk(CACHE_DIR / 'fill_in_middle_ds')

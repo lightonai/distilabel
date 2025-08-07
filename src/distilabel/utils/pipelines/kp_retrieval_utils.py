@@ -3,25 +3,7 @@ import random
 from datasets import Dataset, load_from_disk
 
 from distilabel import utils
-from distilabel.configs.kp_retrieval import PDF_ROOT, DS_PATH, CACHE_DIR
-
-def update_hn_idxs(dataset: Dataset, distiset: Dataset) -> Dataset:
-    '''
-    Update the hard negative indices to point to the correct examples in the distiset
-    '''
-    dataset_filename_to_idx = utils.generate_field_to_idx(dataset, 'image_filename')
-    distiset_filename_to_idx = utils.generate_field_to_idx(distiset, 'image_filename')
-    old_idx_to_new_idx = {
-        dataset_filename_to_idx[fn]: distiset_filename_to_idx[fn] 
-        for fn in set(distiset['image_filename']) if fn in distiset_filename_to_idx
-    }
-    distiset = distiset.map(
-        lambda x: {
-            'hard_negs_idx_img_img': [old_idx_to_new_idx[hni] for hni in x['hard_negs_idx_img_img'] if hni in old_idx_to_new_idx],
-            'hard_negs_idx_txt_img': [old_idx_to_new_idx[hni] for hni in x['hard_negs_idx_txt_img'] if hni in old_idx_to_new_idx],
-        }, num_proc=2,
-    )
-    return distiset
+from distilabel.configs.kp_retrieval import PDF_ROOT, DS_PATH, IMAGES_DS_PATH, CACHE_DIR
 
 def build_images_ds(fn_to_page_count: dict[str, int]) -> tuple[Dataset, dict[str, int]]:
     '''
@@ -39,7 +21,6 @@ def build_images_ds(fn_to_page_count: dict[str, int]) -> tuple[Dataset, dict[str
 
 fn_to_page_count: dict[str, int] = None
 fn_to_idx: dict[str, int] = None
-dataset_idx_to_fn: dict[int, str] = None
 
 def convert_to_vision(row: dict, use_hn: bool = False, **kwargs) -> dict:
     '''
@@ -48,16 +29,13 @@ def convert_to_vision(row: dict, use_hn: bool = False, **kwargs) -> dict:
     For key retrieval, the task is to retrieve text before or after a given key.
     For pos retrieval, the task is to retrieve text described by a page number and page relative location (like 'the first sentence in the second from last paragraph from page 2')
     '''
-    global fn_to_page_count, fn_to_idx, dataset_idx_to_fn
+    global fn_to_page_count, fn_to_idx
     random.seed(kwargs['idx'])
     ifn = row['source'][0]
     pdf_name = utils.pdf_name(ifn)
     if use_hn:
         negs = row['hard_negs_idx_img_img'] + row['hard_negs_idx_txt_img']
-        negs = random.sample(negs, k=random.randint(5, min(len(negs), 63)))
-        image_indices = [
-            fn_to_idx[dataset_idx_to_fn[neg]] for neg in negs
-        ]
+        image_indices = random.sample(negs, k=random.randint(5, min(len(negs), 63)))
         key_page = random.randint(0, len(image_indices))
         image_indices.insert(key_page, fn_to_idx[ifn])
         n_pages = len(image_indices)
@@ -103,18 +81,14 @@ def format_distiset(distiset: Dataset) -> Dataset:
     '''
     Format the distiset to vision format/build actual examples from extractions
     '''
-    global fn_to_page_count, fn_to_idx, dataset_idx_to_fn
+    global fn_to_page_count, fn_to_idx
     fn_to_page_count = utils.count_all_pages(
         pdf_root=PDF_ROOT,
         cache_dir=CACHE_DIR,
         n_jobs=16,
     )
-    
-    dataset = load_from_disk(DS_PATH)
-    dataset_idx_to_fn = utils.generate_idx_to_filename(dataset)
-
-    # build images ds out of fn_to_page_count, as doing this, build map from fn to idx in images ds
-    images_ds, fn_to_idx = build_images_ds(fn_to_page_count)
+    images_ds = load_from_disk(IMAGES_DS_PATH)
+    fn_to_idx = utils.generate_field_to_idx(images_ds, 'image_filename')
     distiset = distiset.select_columns(
         [
             'key_extraction_system', 'pos_extraction_system',
@@ -142,7 +116,7 @@ def format_distiset(distiset: Dataset) -> Dataset:
         vision_ds[task['idx']] = result
 
     distiset = Dataset.from_list(vision_ds).select_columns(['images', 'messages', 'n_images'])
-    return distiset, images_ds
+    return distiset
 
 
 

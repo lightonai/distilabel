@@ -450,3 +450,24 @@ def remove_pdfs_from_dataset(dataset: Dataset, exclude_pdfs: set[str], row_to_if
     '''
     return dataset.filter(lambda x: pdf_name(row_to_ifn(x) if row_to_ifn else x['image_filename']) not in exclude_pdfs)
 
+def remove_pdfs_with_pages_(
+    dataset: Dataset, 
+    pdf_root: Path | str, 
+    cache_dir: Path | str = 'out',  
+    row_to_ifn: Callable = lambda row: row['image_filename'],
+    less_than: int = 0,
+    more_than: int = 10_000,
+):
+    '''
+    Remove all pdfs that have less than less_than pages or more than more_than pages from the dataset.
+    Uses count_all_pages to get the page counts.
+    '''
+    fn_to_page_count = count_all_pages(
+        pdf_root=pdf_root,
+        cache_dir=cache_dir,
+        n_jobs=16,
+    )
+    return dataset.filter(
+        lambda x: less_than <= fn_to_page_count[pdf_name(row_to_ifn(x))] <= more_than,
+        num_proc=16,
+    )

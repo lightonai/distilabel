@@ -69,90 +69,96 @@ key_extraction_ps = PromptSamplerConfig(
     }
 )
 
-lm_configs_0=[
-    # Stage 0: Transcribe the page
-    LMConfig(
-        # path='google/gemma-3-27b-it',
-        path='Qwen/Qwen2.5-VL-32B-Instruct', 
-        # path='Qwen/Qwen2.5-VL-7B-Instruct', 
-        data_ratio=1.0, 
-        task_name='transcribe',
-        temperature=0.0,
-        max_new_tokens=4096,
-        tp_size=1,
-        replicas=1,
-        vllm_kwargs={
-            'limit-mm-per-prompt': "'{\"image\": 64}'", 
-            'quantization': 'fp8',
-            'max-model-len': '96000',
-            'gpu-memory-utilization': 0.95,
-        },
-        out_model=None,
-        system_template_path='distilabel/prompts/transcribe.txt',
-        prompt_sampler_config=PromptSamplerConfig(),
-    ),
-]
+work_dir = Path('/lustre/fswork/projects/rech/eya/uzj46do/')
+scratch_dir = Path('/lustre/fsn1/projects/rech/eya/uzj46do/')
 
-lm_configs_1=[
-    # Stage 1: Key and Pos Retrieval
-    LMConfig(  # key selection
-        # path='google/gemma-3-27b-it',
-        path='Qwen/Qwen2.5-VL-32B-Instruct', 
-        # path='Qwen/Qwen2.5-VL-7B-Instruct', 
-        data_ratio=1.0, 
-        task_name='key_extraction',
-        temperature=0.2,
-        max_new_tokens=4096,
-        tp_size=1,
-        replicas=1,
-        vllm_kwargs={
-            'limit-mm-per-prompt': "'{\"image\": 64}'", 
-            'quantization': 'fp8',
-            'max-model-len': '96000',
-            'gpu-memory-utilization': 0.95,
-        },
-        out_model='KeyExtraction',
-        system_template_path='distilabel/prompts/key_extraction.txt',
-        prompt_sampler_config=key_extraction_ps,
-    ),
-    LMConfig(  # pos extraction
-        # path='google/gemma-3-27b-it',
-        path='Qwen/Qwen2.5-VL-32B-Instruct', 
-        # path='Qwen/Qwen2.5-VL-7B-Instruct', 
-        data_ratio=1.0, 
-        task_name='pos_extraction',
-        temperature=0.2,
-        max_new_tokens=4096,
-        tp_size=1,
-        replicas=1,
-        vllm_kwargs={
-            'limit-mm-per-prompt': "'{\"image\": 64}'", 
-            'quantization': 'fp8',
-            'max-model-len': '96000',
-            'gpu-memory-utilization': 0.95,
-        },
-        out_model='PosExtraction',
-        system_template_path='distilabel/prompts/pos_extraction.txt',
-        prompt_sampler_config=pos_extraction_ps,
-    ),
-]
-
-EXCLUDE_PDFS = set(Path('/mnt/nfs/austin_shared/mp_data_gen/bench_pdfs.txt').read_text().splitlines())
-AVAILABLE_GPUS = [2, 3]
-DS_PATH = '/mnt/nfs/austin_shared/mp_data_gen/out/scraped_v0.3_with_txt_img_neg_references_filtered'
-IMAGES_DS_PATH = '/mnt/nfs/austin_shared/mp_data_gen/out/all_pdfs_images'
-PDF_ROOT = '/mnt/nfs/pdfs'
-CACHE_DIR = 'out'
+EXCLUDE_PDFS = set((work_dir / 'distilabel/bench_pdfs.txt').read_text().splitlines())
+DS_PATH = work_dir / 'data' / 'scraped_and_pdfa'
+IMAGES_DS_PATH = work_dir / 'data' / 'all_pdfs_images_ds'
+PDF_ROOT = scratch_dir / 'pdfs'
+CACHE_DIR = scratch_dir / 'distilabel/out'
+AVAILABLE_GPUS = [0, 1, 2, 3]
 
 stages = [
     # Stage 0: Transcribe the page
     Stage(
-        lm_configs=lm_configs_0,
+        lm_configs=[
+            LMConfig(
+                # path='google/gemma-3-27b-it',
+                path='Qwen/Qwen2.5-VL-32B-Instruct', 
+                # path='Qwen/Qwen2.5-VL-7B-Instruct', 
+                data_ratio=1.0, 
+                task_name='transcribe',
+                temperature=0.0,
+                max_new_tokens=4096,
+                tp_size=None,
+                replicas=32,
+                vllm_kwargs={
+                    'limit-mm-per-prompt': "'{\"image\": 64}'", 
+                    'quantization': 'fp8',
+                    'max-model-len': '96000',
+                    'gpu-memory-utilization': 0.95,
+                },
+                out_model=None,
+                system_template_path='distilabel/prompts/transcribe.txt',
+                prompt_sampler_config=PromptSamplerConfig(),
+                path_substitution=('/mnt/nfs/pdfs/', '/lustre/fsn1/projects/rech/eya/uzj46do/pdfs/'),
+            ),
+        ],
         available_gpus=AVAILABLE_GPUS,
         max_dims=(1000, 1000),
     ),
     Stage(
-        lm_configs=lm_configs_1,
+        lm_configs=[
+            LMConfig(  # key selection
+                # path='google/gemma-3-27b-it',
+                path='Qwen/Qwen2.5-VL-32B-Instruct', 
+                # path='Qwen/Qwen2.5-VL-7B-Instruct', 
+                data_ratio=1.0, 
+                task_name='key_extraction',
+                temperature=0.2,
+                max_new_tokens=4096,
+                tp_size=None,
+                replicas=32,
+                vllm_kwargs={
+                    'limit-mm-per-prompt': "'{\"image\": 64}'", 
+                    'quantization': 'fp8',
+                    'max-model-len': '96000',
+                    'gpu-memory-utilization': 0.95,
+                },
+                out_model='KeyExtraction',
+                system_template_path='distilabel/prompts/key_extraction.txt',
+                prompt_sampler_config=key_extraction_ps,
+                path_substitution=('/mnt/nfs/pdfs/', '/lustre/fsn1/projects/rech/eya/uzj46do/pdfs/'),
+            ),
+        ],
+        available_gpus=AVAILABLE_GPUS,
+        max_dims=(1000, 1000),
+    ),
+    Stage(
+        lm_configs=[
+            LMConfig(  # pos extraction
+                # path='google/gemma-3-27b-it',
+                path='Qwen/Qwen2.5-VL-32B-Instruct', 
+                # path='Qwen/Qwen2.5-VL-7B-Instruct', 
+                data_ratio=1.0, 
+                task_name='pos_extraction',
+                temperature=0.2,
+                max_new_tokens=4096,
+                tp_size=None,
+                replicas=32,
+                vllm_kwargs={
+                    'limit-mm-per-prompt': "'{\"image\": 64}'", 
+                    'quantization': 'fp8',
+                    'max-model-len': '96000',
+                    'gpu-memory-utilization': 0.95,
+                },
+                out_model='PosExtraction',
+                system_template_path='distilabel/prompts/pos_extraction.txt',
+                prompt_sampler_config=pos_extraction_ps,
+                path_substitution=('/mnt/nfs/pdfs/', '/lustre/fsn1/projects/rech/eya/uzj46do/pdfs/'),
+            ),
+        ],
         available_gpus=AVAILABLE_GPUS,
         max_dims=(1000, 1000),
     ),

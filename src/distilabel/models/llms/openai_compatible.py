@@ -23,6 +23,7 @@ from distilabel.prompt_sampler import PromptSampler
 from distilabel.constants import STRUCTURED_OUTPUT_RETRIES
 from .lm_cache import get_lm_cache
 from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures.process import BrokenProcessPool
 from multiprocessing import cpu_count
 
 def _format_one_input(args) -> 'ChatType':
@@ -143,7 +144,12 @@ class VLM:
             for input_data, system_prompt in zip(inputs, prompts)
         ]
 
-        return list(self._executor.map(_format_one_input, tasks))
+        try:
+            return list(self._executor.map(_format_one_input, tasks))
+        except Exception as e:  # try to restart the pool and continue
+            del self._executor
+            self._executor = ProcessPoolExecutor(max_workers=min(max(4, cpu_count()), 32))
+            return list(self._executor.map(_format_one_input, tasks))
 
     def load(self):
         self.prompt_sampler = PromptSampler(self.lm_config.prompt_sampler_config, self.lm_config.system_template)
