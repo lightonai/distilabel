@@ -15,6 +15,7 @@ from tenacity import (
 
 from distilabel.models.llms import OpenAILLM, vLLMAPI
 from distilabel.models.mixins.cuda_device_placement import CudaDevicePlacementMixin
+from distilabel.models.mixins.vllm_server_placement import VLLMServerPlacementMixin
 from distilabel.typing import ChatType, FormattedInput, GenerateOutput
 
 from distilabel import utils
@@ -147,6 +148,7 @@ class VLM:
         try:
             return list(self._executor.map(_format_one_input, tasks))
         except Exception as e:  # try to restart the pool and continue
+            self._executor.shutdown(wait=False)
             del self._executor
             self._executor = ProcessPoolExecutor(max_workers=min(max(4, cpu_count()), 32))
             return list(self._executor.map(_format_one_input, tasks))
@@ -325,7 +327,7 @@ def structured_output(agenerate: Callable) -> Callable:
 
     return agenerate_structured
 
-class OpenAILM(OpenAILLM, CudaDevicePlacementMixin, VLM):
+class OpenAILM(OpenAILLM, CudaDevicePlacementMixin, VLLMServerPlacementMixin, VLM):
     '''OpenAILLM wrapper for handling images 
     
     OpenAI is the default client
@@ -363,7 +365,10 @@ class OpenAILM(OpenAILLM, CudaDevicePlacementMixin, VLM):
 
             self._vllm_api = vLLMAPI(self.lm_config)
             self.base_url = f'http://localhost:{self._vllm_api.port}/v1'
+            # round robin distribute LLMs to vLLM servers listed in VLLM_BASE_URLS if using running vLLM
             if self.use_running_vllm:
+                self.disable_vllm_server_placement = os.environ.get('VLLM_BASE_URLS') is None
+                VLLMServerPlacementMixin.load(self)
                 base_url = os.environ.get('VLLM_API_BASE_URL', 'http://localhost:8000')
                 self.base_url = f'{base_url}/v1'
 
@@ -375,7 +380,8 @@ class OpenAILM(OpenAILLM, CudaDevicePlacementMixin, VLM):
         
         # must come after CUDA_VISIBLE_DEVICES is set properly
         if self.use_vllm and not self.use_running_vllm:
-            # I want this to throw an error because the visible devices should be set by the placement mixin
+            # I want this to throw an error if the key is not set 
+            # because the visible devices should be set by the placement mixin
             gpu = os.environ['CUDA_VISIBLE_DEVICES'].split(',')[0]
             self._vllm_api.gpu = gpu
             self._vllm_api.start_vllm()
