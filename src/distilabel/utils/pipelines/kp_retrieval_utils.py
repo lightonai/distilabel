@@ -5,20 +5,6 @@ from datasets import Dataset, load_from_disk
 from distilabel import utils
 from distilabel.configs.kp_retrieval import PDF_ROOT, DS_PATH, IMAGES_DS_PATH, CACHE_DIR
 
-def build_images_ds(fn_to_page_count: dict[str, int]) -> tuple[Dataset, dict[str, int]]:
-    '''
-    Build the images dataset from the fn_to_page_count
-    '''
-    images_ds = {'image': [], 'image_filename': []}
-    fn_to_idx = {}
-    for fn, page_count in fn_to_page_count.items():
-        for i in range(page_count):
-            ifn = utils.page_path(fn, i)
-            images_ds['image'].append(None)
-            images_ds['image_filename'].append(ifn)
-            fn_to_idx[ifn] = len(images_ds['image']) - 1
-    return Dataset.from_dict(images_ds), fn_to_idx
-
 fn_to_page_count: dict[str, int] = None
 fn_to_idx: dict[str, int] = None
 

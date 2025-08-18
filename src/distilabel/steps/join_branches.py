@@ -1,5 +1,5 @@
 from collections import defaultdict
-from typing import TYPE_CHECKING, Any, List, Dict
+from typing import TYPE_CHECKING, Any, List, Dict, Callable
 
 from distilabel.steps.base import GlobalStep, Step, StepInput
 
@@ -29,16 +29,27 @@ def make_hashable(item: Any):
 class ConcatenateBranches(Step):
     """
     A `Step` that joins rows from multiple input branches, simply concatenating them 
-    and filling in the missing values with `None`.
+    and filling in the missing values with factory given by col_factories, otherwise 
+    `None`.
 
     Attributes:
         cols: A list of columns that you can reference in input or output mappings.
+        col_factories: A dictionary mapping column names to a factory for constructing
+            a default instance of the correct type. For any row missing some of the cols 
+            in `cols`, the factory will be used to fill in the missing values. If no factory
+            is provided for a column, it will default to `None`. This is important if e.g. 
+            one branch has a col of type str and the other has no values for this col,
+            filling it with `None` will cause an error due to the pyarrow writing a table
+            with schema null for that col for one set of batches and str for others, which
+            will mismatch when trying to be joined. If the col is always present in all branches
+            with correct typing, you can omit the factory for that col.
 
     Output:
         list[`StepOutput`] (a list of dictionaries)
     """
 
     cols: List[str] = []
+    col_factories: Dict[str, Callable] = {}
 
     @property
     def inputs(self) -> "StepColumns":
@@ -49,11 +60,12 @@ class ConcatenateBranches(Step):
         return self.cols
 
     def process(self, *inputs: StepInput) -> "StepOutput":
+        col_factory = lambda col: self.col_factories.get(col, lambda: None)
         cat_rows = []
         for branch_input in inputs:
             cat_rows.extend(
                 [
-                    {**row, **{col: None for col in self.cols if col not in row}}
+                    {**row, **{col: col_factory(col)() for col in self.cols if col not in row}}
                     for row in branch_input
                 ]
             )
