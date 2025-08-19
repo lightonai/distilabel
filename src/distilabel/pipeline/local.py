@@ -217,7 +217,7 @@ class Pipeline(BasePipeline):
 
         self._log_queue = cast("Queue[Any]", mp.Queue())
         
-        if distiset := super().run(
+        if (distiset := super().run(
             parameters=parameters,
             load_groups=load_groups,
             use_cache=use_cache,
@@ -227,7 +227,7 @@ class Pipeline(BasePipeline):
             dataset=dataset,
             dataset_batch_size=dataset_batch_size,
             logging_handlers=logging_handlers,
-        ):
+        )) is not None:
             return distiset
 
         self._managers = {}
