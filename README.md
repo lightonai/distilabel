@@ -168,6 +168,7 @@ To directly contribute with `distilabel`, check our [good first issues](https://
 
 ## Notes About My Additions
 - Run everything from the outside the `distilabel` directory. e.g. `python distilabel/pipelines/single_page_qa.py`
+- Set your environment variables in the `.env` file. `OPENAI_API_KEY` at least is required (but can be None).
 - In the modified distilabel package, here are some of the files I have added (you could also check the git commit history)
     - `pipelines/single_page_qa.py`. Put new pipelines here. The single page one is a good reference for how to do everything, copy and modify
     - `src/distilabel/configs/single_pages.py`. The config for single page QA, check it out to understand how the pipeline runs and what you can modify
