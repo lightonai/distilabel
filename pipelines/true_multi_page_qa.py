@@ -42,9 +42,11 @@ def structured_and_requires_multiple_pages(row: dict, cols: list[str]) -> bool:
 
 STAGE = 0
 '''tracks the current stage of the pipeline'''
+BATCH_SIZE = 256
 
 def run_pipeline(config: Config):
     global STAGE
+    global BATCH_SIZE
     random.seed(0)
     
     stages = config.stages
@@ -68,7 +70,7 @@ def run_pipeline(config: Config):
     ) as pipeline:
         ################## STAGE 0: INITIAL QUESTIONS ##################
         stage = stages[STAGE]
-        load_data = LoadDataFromDataset(name="load_data", dataset=dataset, batch_size=64)  # cols: ['source', ...]
+        load_data = LoadDataFromDataset(name="load_data", dataset=dataset, batch_size=BATCH_SIZE)  # cols: ['source', ...]
         
         data_router = pipe_utils.data_router(
             step_distribution=[lm_config.data_ratio for lm_config in stage.lm_configs]
@@ -82,7 +84,8 @@ def run_pipeline(config: Config):
                 llm=lm,
                 lm_config=lm.lm_config,
                 input_formatter=lm.format_input,
-                input_batch_size=64,
+                parallel_input_formatter=lm.parallel_format_inputs,
+                input_batch_size=BATCH_SIZE,
                 resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.tp_size),
                 output_mappings={'system': 'question_system', 'model_name': 'question_model_name', 'analysis': 'question_analysis'},
                 **lm.lm_config.task_kwargs,
@@ -93,7 +96,7 @@ def run_pipeline(config: Config):
         questions_to_rows = ListToRows(
             name="questions_to_rows",
             input_col='questions',
-            input_batch_size=64,
+            input_batch_size=BATCH_SIZE,
             output_mappings={'questions': 'question'},
             resources=StepResources(replicas=1),
         )  # cols: ['questions', ...] -> ['question', ...]
@@ -102,7 +105,7 @@ def run_pipeline(config: Config):
             name="drop_none_questions",
             cols=['question'],
             condition=utils.generation_is_structured,
-            input_batch_size=64,
+            input_batch_size=BATCH_SIZE,
         )  # cols: ['question', ...] -> ['question', ...]
         
         ################## STAGE 1: INDIVIDUAL PAGE ANSWERS AND BREAK DOWN QUESTION ##################
@@ -118,7 +121,7 @@ def run_pipeline(config: Config):
                 name=f'split_pages_{branch}',
                 input_col='source',
                 keep_as_list=True,  # keep source as a list of strings (format distinguishing pages from text directly for input)
-                input_batch_size=64,
+                input_batch_size=BATCH_SIZE,
                 resources=StepResources(replicas=1),
             ) for branch in ['sp_branch', 'q_req_branch']
         }  # cols: ['source', ...] -> ['source', ...]
@@ -127,7 +130,7 @@ def run_pipeline(config: Config):
             name='q_req_branch', 
             cols=['source'],
             output_mappings={'source': 'page_source'}, 
-            input_batch_size=64
+            input_batch_size=BATCH_SIZE
         )
         q_req_router = pipe_utils.data_router(
             step_distribution=[lm.lm_config.data_ratio for lm in q_req_lms]
@@ -139,7 +142,8 @@ def run_pipeline(config: Config):
                 llm=lm,
                 lm_config=lm.lm_config,
                 input_formatter=lm.format_input,
-                input_batch_size=64,
+                parallel_input_formatter=lm.parallel_format_inputs,
+                input_batch_size=BATCH_SIZE,
                 resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.tp_size),
                 extra_cols=['answer', 'page_source'],
                 input_mappings={'source': 'question'},  # don't want the pages as context, just question
@@ -158,7 +162,7 @@ def run_pipeline(config: Config):
             name='filter_question_requirements',
             cols=['question_requirements'],
             condition=utils.generation_is_structured,
-            input_batch_size=64,
+            input_batch_size=BATCH_SIZE,
         )
 
         sp_answer_router = pipe_utils.data_router(
@@ -171,8 +175,9 @@ def run_pipeline(config: Config):
                 llm=lm,
                 lm_config=lm.lm_config,
                 input_formatter=lm.format_input,
+                parallel_input_formatter=lm.parallel_format_inputs,
                 lm_input_cols=['question'],
-                input_batch_size=64,
+                input_batch_size=BATCH_SIZE,
                 resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.tp_size),
                 output_mappings={'system': 'sp_answer_system', 'model_name': 'sp_answer_model_name', 'generation': 'sp_answer'},
                 **lm.lm_config.task_kwargs,
@@ -185,19 +190,19 @@ def run_pipeline(config: Config):
             name='drop_none_sp_answers',
             cols=['sp_answer'],
             condition=utils.generation_is_structured,
-            input_batch_size=64,
+            input_batch_size=BATCH_SIZE,
         )
 
         collect_sp_answers_and_q_req = JoinParallelBranches(
             name='collect_sp_answers_and_q_req', 
             join_on_cols=['source', 'question'],  # the pair (source, question) is unique for each branch
-            input_batch_size=64,
+            input_batch_size=BATCH_SIZE,
             output_mappings={'source': 'page_source'},  # renaming this so that I can replace the source with question on the judge step
         )
 
         # global step must take and output all current rows, so that will all get routed together
         # we use the no op to break that into batches
-        break_up_collect_sp_answers_and_q_req = NoOp(name='break_up_collect_sp_answers_and_q_req', input_batch_size=64)
+        break_up_collect_sp_answers_and_q_req = NoOp(name='break_up_collect_sp_answers_and_q_req', input_batch_size=BATCH_SIZE)
         
         ################## STAGE 2: JUDGE ANSWERS AND FILTER ##################
         STAGE += 1
@@ -215,9 +220,10 @@ def run_pipeline(config: Config):
                 llm=lm,
                 lm_config=lm.lm_config,
                 input_formatter=lm.format_input,
+                parallel_input_formatter=lm.parallel_format_inputs,
                 lm_input_cols=['question_requirements', 'sp_answer'],
                 lm_input_col_prefixes=['question requirements: ', 'answer: '],
-                input_batch_size=64,
+                input_batch_size=BATCH_SIZE,
                 resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.tp_size),
                 extra_cols=['page_source'],
                 input_mappings={'source': 'question'},  # don't want the pages as context
@@ -246,14 +252,14 @@ def run_pipeline(config: Config):
                 'question_requirements_model_name',
                 'split',
             }, 
-            input_batch_size=64,
+            input_batch_size=BATCH_SIZE,
         )
 
         drop_poor_questions = FilterRows(  # checks the results of individual page answers to see if any of them passed
             name='drop_poor_questions',
             cols=['question_fully_answered'],
             condition=structured_and_requires_multiple_pages,
-            input_batch_size=64,
+            input_batch_size=BATCH_SIZE,
         )  # cols: ['question_fully_answered', ...] -> ['question_fully_answered', ...]
         
         ################# STAGE 3: QUALITY ANSWERS TO QUALITY QUESTIONS ##################
@@ -272,8 +278,9 @@ def run_pipeline(config: Config):
                 llm=lm,
                 lm_config=lm.lm_config,
                 input_formatter=lm.format_input,
+                parallel_input_formatter=lm.parallel_format_inputs,
                 lm_input_cols=['question'],
-                input_batch_size=64,
+                input_batch_size=BATCH_SIZE,
                 resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.tp_size),
                 output_mappings={'system': 'answer_system', 'model_name': 'answer_model_name', 'generation': 'answer'},
                 **lm.lm_config.task_kwargs,
@@ -285,7 +292,7 @@ def run_pipeline(config: Config):
             name='drop_none_answers',
             cols=['answer'],
             condition=utils.generation_is_structured,
-            input_batch_size=64,
+            input_batch_size=BATCH_SIZE,
         )
         
         ## Pipeline

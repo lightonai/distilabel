@@ -67,10 +67,11 @@ def add_hard_negs_back(dataset: Dataset, filtered_dataset: Dataset):
 
 STAGE = 0
 '''tracks the current stage of the pipeline'''
-
+BATCH_SIZE = 256
 
 def run_pipeline(config: Config):
     global STAGE
+    global BATCH_SIZE
     random.seed(0)
     
     stages = config.stages
@@ -88,7 +89,7 @@ def run_pipeline(config: Config):
     ) as pipeline:
         ################## STAGE 0 ##################
         stage = stages[STAGE]
-        load_data = LoadDataFromDataset(name="load_data", dataset=dataset, batch_size=256)  # cols: ['source', 'question', ...]
+        load_data = LoadDataFromDataset(name="load_data", dataset=dataset, batch_size=BATCH_SIZE)  # cols: ['source', 'question', ...]
         data_router = pipe_utils.data_router(
             step_distribution=[lm_config.data_ratio for lm_config in stage.lm_configs]
         )
@@ -101,7 +102,7 @@ def run_pipeline(config: Config):
                 lm_config=lm.lm_config,
                 input_formatter=lm.format_input,
                 parallel_input_formatter=lm.parallel_format_inputs,
-                input_batch_size=256,
+                input_batch_size=BATCH_SIZE,
                 resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.tp_size),
                 output_mappings={'system': 'references_system', 'model_name': 'references_model_name'},
                 # use_cache=False,  # turn off batch level caching
@@ -116,7 +117,7 @@ def run_pipeline(config: Config):
                 utils.generation_is_structured,  # structured output successful
                 utils.logical_not_filter(utils.cols_true),  # is not a references page
             ),
-            input_batch_size=256,
+            input_batch_size=BATCH_SIZE,
         )  # cols: ['is_references_page', ...] -> ['is_references_page', ...]
 
         ## Pipeline

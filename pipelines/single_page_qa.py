@@ -26,17 +26,11 @@ from distilabel.configs.single_pages import config
 
 STAGE = 0
 '''tracks the current stage of the pipeline'''
-
-def lm_task_router(lm: OpenAILM, **kwargs) -> Task:
-    # Here as a demonstration of general versatility in configuring pipelines, you may want different LMs running different tasks
-    match lm.lm_config.task_name:
-        case ('question_generation' | 'answer_generation'):
-            return LMGenerationTask(llm=lm, **kwargs)
-        case _:
-            raise ValueError(f"Unknown task name: {lm.lm_config.task_name}")
+BATCH_SIZE = 256
 
 def run_pipeline(config: Config):
     global STAGE
+    global BATCH_SIZE
     
     stages = config.stages
     dataset = load_from_disk('out/mp_synthetic_data')['single_pages']
@@ -48,7 +42,7 @@ def run_pipeline(config: Config):
     ) as pipeline:
         ################## STAGE 0: GENERATE QUESTIONS ##################
         stage = stages[STAGE]
-        load_data = LoadDataFromDataset(name="load_data", dataset=dataset, batch_size=32)  # cols: ['source', ...]
+        load_data = LoadDataFromDataset(name="load_data", dataset=dataset, batch_size=BATCH_SIZE)  # cols: ['source', ...]
         # the data router handles routing the data to different lms according to the data_ratio
         data_router = pipe_utils.data_router(
             step_distribution=[lm_config.data_ratio for lm_config in stage.lm_configs]
@@ -56,23 +50,24 @@ def run_pipeline(config: Config):
         # initialize lms for this stage, however, they won't launch servers and stuff until they are loaded
         lms = pipe_utils.make_lms(config, stage)
         generate_questions = [
-            lm_task_router(
+            LMGenerationTask(
                 name=f"question_generation_{i}",
                 stage=stage,
-                lm=lm,
+                llm=lm,
                 lm_config=lm.lm_config,
                 input_formatter=lm.format_input,
-                input_batch_size=32,
+                parallel_input_formatter=lm.parallel_format_inputs,
+                input_batch_size=BATCH_SIZE,
                 resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.tp_size),
                 output_mappings={'system': 'question_system', 'model_name': 'question_model_name'},
                 **lm.lm_config.task_kwargs,
-            ) 
+            )
             for i, lm in enumerate(lms)
         ]  # cols: ['source', ...] -> ['questions', 'key_ideas', 'key_details', 'question_system', 'question_model_name', ...]
         questions_to_rows = ListToRows(  # expand the generated list of questions into separate rows
             name="questions_to_rows",
             input_col='questions',
-            input_batch_size=32,
+            input_batch_size=BATCH_SIZE,
             output_mappings={'questions': 'question'},
             resources=StepResources(replicas=4),
         )  # cols: ['questions', ...] -> ['question', ...]
@@ -80,7 +75,7 @@ def run_pipeline(config: Config):
             name="drop_none_questions",
             cols=['question'],
             condition=utils.generation_is_structured,
-            input_batch_size=32,
+            input_batch_size=BATCH_SIZE,
         )  # cols: ['question', ...] -> ['question', ...]
     
         ################## STAGE 1: GENERATE ANSWERS ##################
@@ -91,14 +86,15 @@ def run_pipeline(config: Config):
         )
         lms = pipe_utils.make_lms(config, stage)
         generate_answers = [
-            lm_task_router(
+            LMGenerationTask(
                 name=f"answer_generation_{i}",
                 stage=stage,
-                lm=lm,
+                llm=lm,
                 lm_config=lm.lm_config,
                 input_formatter=lm.format_input,
+                parallel_input_formatter=lm.parallel_format_inputs,
                 lm_input_cols=['question'],
-                input_batch_size=32,
+                input_batch_size=BATCH_SIZE,
                 resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.tp_size),
                 output_mappings={'system': 'answer_system', 'model_name': 'answer_model_name', 'generation': 'answer'},
                 **lm.lm_config.task_kwargs,
@@ -110,7 +106,7 @@ def run_pipeline(config: Config):
             name="drop_none_answers",
             cols=['answer'],
             condition=utils.generation_is_structured,
-            input_batch_size=32,
+            input_batch_size=BATCH_SIZE,
         )
 
         ## Pipeline
