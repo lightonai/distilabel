@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import copy
+from uuid import uuid4
 import hashlib
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -234,8 +235,11 @@ class _Batch(_Serializable, SignatureMixin):
                 " is not set."
             )
 
+        # when there are multiple successor, base.py _manage_batch_flow makes a copy for each successor
+        # these will generate the same file path and then read/write over each other
+        # so we generate a unique path for each batch
         seq_no_dir = (
-            base_path / f"seq_no_{self.seq_no}" if base_path else UPath(self.data_path)
+            base_path / f"seq_no_{self.seq_no}_{str(uuid4())}" if base_path else UPath(self.data_path)
         )
         seq_no_dir._fs_cached = self._fs  # type: ignore
         seq_no_dir.mkdir(parents=True, exist_ok=True)

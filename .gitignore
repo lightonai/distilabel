@@ -80,3 +80,7 @@ venv.bak/
 .DS_Store
 
 uv.lock
+bench_pdfs.txt
+*logs/
+build_images_ds.*
+multi_node_vllm.*

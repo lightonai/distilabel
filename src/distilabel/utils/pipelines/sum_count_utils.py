@@ -64,7 +64,16 @@ def format_distiset(distiset: Dataset) -> Dataset:
             {'rows': shfl, 'idx': idx * SHUFFLE_FACTOR + shfl_idx} 
             for idx, row_id_idxs in enumerate(row_id_to_idxs.values())
             for shfl_idx, shfl in enumerate([[distiset[i] for i in row_id_idxs]] + [
-                [distiset[i] for i in random.sample(row_id_idxs, k=random.randint(min(len(row_id_idxs), 5), int(0.8 * len(row_id_idxs))))] 
+                [
+                    distiset[i] 
+                    for i in random.sample(
+                        row_id_idxs, 
+                        k=random.randint(
+                            min(len(row_id_idxs), 5), 
+                            max(int(0.8 * len(row_id_idxs)), min(len(row_id_idxs), 5)) # avoid empty range
+                        )
+                    )
+                ] 
                 for _ in range(SHUFFLE_FACTOR - 1)
             ])
         ],

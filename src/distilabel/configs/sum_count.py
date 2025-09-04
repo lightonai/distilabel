@@ -36,8 +36,8 @@ lm_configs=[
         task_name='count',
         temperature=0.0,
         max_new_tokens=4096,
-        tp_size=1,
-        replicas=1,
+        tp_size=None,
+        replicas=16,
         vllm_kwargs={
             'limit-mm-per-prompt': "'{\"image\": 64}'", 
             'quantization': 'fp8',
@@ -46,16 +46,21 @@ lm_configs=[
         },
         out_model='ThinkingCount',
         prompt_sampler_config=PromptSamplerConfig(),
+        path_substitution=('/mnt/nfs/pdfs/', '/lustre/fsn1/projects/rech/eya/uzj46do/pdfs/'),
     ),
 ]
 
-EXCLUDE_PDFS = set(Path('/mnt/nfs/austin_shared/mp_data_gen/bench_pdfs.txt').read_text().splitlines())
-DS_PATH = '/mnt/nfs/austin_shared/mp_data_gen/out/scraped_v0.3_with_txt_img_neg_references_filtered'
-IMAGES_DS_PATH = '/mnt/nfs/austin_shared/mp_data_gen/out/all_pdfs_images'
-PDF_ROOT = '/mnt/nfs/pdfs'
-CACHE_DIR = 'out'
+work_dir = Path('/lustre/fswork/projects/rech/eya/uzj46do/')
+scratch_dir = Path('/lustre/fsn1/projects/rech/eya/uzj46do/')
+
 SHUFFLE_FACTOR = 3
+EXCLUDE_PDFS = set((work_dir / 'distilabel/bench_pdfs.txt').read_text().splitlines())
+DS_PATH = work_dir / 'data' / 'scraped_and_pdfa'
+IMAGES_DS_PATH = work_dir / 'data' / 'all_pdfs_images_ds'
+PDF_ROOT = scratch_dir / 'pdfs'
+CACHE_DIR = scratch_dir / 'distilabel/out'
 AVAILABLE_GPUS = [0, 1, 2, 3]
+
 stages = [
     Stage(
         lm_configs=lm_configs,

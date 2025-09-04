@@ -23,7 +23,7 @@ from distilabel.pydantics import Config
 from distilabel import utils
 import distilabel.utils.pipe_utils as pipe_utils
 
-from distilabel.configs.kp_retrieval import config, DS_PATH, CACHE_DIR, EXCLUDE_PDFS
+from distilabel.configs.kp_retrieval import config, DS_PATH, PDF_ROOT, CACHE_DIR, EXCLUDE_PDFS
 
 def slice_key(key_extraction: str, **kwargs) -> str:
     '''Take key (key_selection) as a random slice of the target to extract (key_extraction)'''
@@ -43,22 +43,23 @@ def get_ds(n: int) -> Dataset:
     dataset = load_from_disk(DS_PATH)
     dataset = dataset.shuffle(seed=0)
     dataset = dataset.select(range(n))
-    dataset = dataset.map(lambda x: {'source': [x['image_filename']]})
+    dataset = dataset.map(lambda x: {'source': [x['image_filename']]}, num_proc=64)
     dataset = dataset.select_columns(['source', 'hard_negs_idx_img_img', 'hard_negs_idx_txt_img'])
     return dataset
 
 STAGE = 0
-BATCH_SIZE = 256
 '''tracks the current stage of the pipeline'''
+BATCH_SIZE = 256
 
 def run_pipeline(config: Config):
     global STAGE
     random.seed(0)
     
     stages = config.stages
-    # dataset = get_ds(2_000_000)
-    dataset = get_ds(16)
-    dataset = utils.remove_pdfs_from_dataset(dataset, EXCLUDE_PDFS)
+    dataset = get_ds(2_000_000)
+    # dataset = get_ds(16)
+    dataset = utils.remove_pdfs_from_dataset(dataset, EXCLUDE_PDFS, row_to_ifn=lambda row: row['source'][0])
+    dataset = utils.remove_pdfs_with_pages_(dataset, PDF_ROOT, CACHE_DIR, less_than=2, row_to_ifn=lambda row: row['source'][0])
 
     with Pipeline(
         name='kp_retrieval',
@@ -95,7 +96,7 @@ def run_pipeline(config: Config):
             input_batch_size=BATCH_SIZE,
         )
 
-        ################## STAGE 1: GEN KEY AND POS RETRIEVAL QUESTIONS ##################
+        ################## STAGE 1: GEN KEY RETRIEVAL ##################
         STAGE += 1
         stage = stages[STAGE]
 
@@ -150,6 +151,11 @@ def run_pipeline(config: Config):
             input_batch_size=BATCH_SIZE,
         )
 
+        ################## STAGE 2: GEN POS RETRIEVAL ##################
+        STAGE += 1
+        stage = stages[STAGE]
+
+        lms = pipe_utils.make_lms(config, stage, use_cache=False)
         # Pos Retrieval
         pr_branch = NoOp(name='pr_branch', cols=['source'], output_mappings={'source': 'img_source'}, input_batch_size=BATCH_SIZE)
         generate_pos_extraction = [
@@ -164,7 +170,6 @@ def run_pipeline(config: Config):
                 resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.tp_size),
                 input_mappings={'source': 'md'},
                 output_mappings={'system': 'pos_extraction_system', 'model_name': 'pos_extraction_model_name', 'extraction': 'pos_extraction', 'source': 'md'},
-                use_cache=True,
                 # invalidate_cache=True,
                 **lm.lm_config.task_kwargs,
             )
@@ -212,32 +217,37 @@ def run_pipeline(config: Config):
                     *generate_transcribe,
                     filter_transcribe,
                 ],
-                len(stage.available_gpus),
+                len(stages[0].available_gpus),
             ) +
             pipe_utils.steps_to_load_groups(
                 [ 
                     kr_branch,
-                    pr_branch,
                     *generate_key_extraction,
                     filter_key_extraction,
                     random_key_slice,
                     filter_key_selection,
+                ],
+                len(stages[1].available_gpus),
+            ) + 
+            pipe_utils.steps_to_load_groups(
+                [
+                    pr_branch,
                     *generate_pos_extraction,
                     filter_pos_extraction,
                     join,
                     img_to_source,
                 ],
-                len(stage.available_gpus),
+                len(stages[2].available_gpus),
             )
         ),
         use_cache=True,
-        invalidate_distiset=False,
+        invalidate_distiset=True,
+        use_fs_to_pass_data=True,
     )
     return distiset
 
 if __name__ == '__main__':
     distiset: Dataset = run_pipeline(config)['default']['train']
     distiset = distiset.remove_columns(['distilabel_metadata'])  # don't need this for this pipeline
-    distiset, images_ds = format_distiset(distiset)
-    distiset.save_to_disk(Path(CACHE_DIR) / 'kp_retrieval_ds')
-    images_ds.save_to_disk(Path(CACHE_DIR) / 'all_pdfs_images')
+    distiset = format_distiset(distiset)
+    distiset.save_to_disk(CACHE_DIR / 'kp_retrieval_ds')

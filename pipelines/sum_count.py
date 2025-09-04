@@ -28,6 +28,7 @@ from distilabel.configs.sum_count import (
     config, 
     PDF_ROOT, 
     sum_count_prompt_sampler_config, 
+    IMAGES_DS_PATH,
     DS_PATH,
     CACHE_DIR,
     EXCLUDE_PDFS,
@@ -42,7 +43,7 @@ def get_ds(dataset: Dataset, n: int) -> Dataset:
         cache_dir=CACHE_DIR,
         n_jobs=64,
     )
-    pdfs = random.sample(list([k for k, v in fn_to_page_count.items() if v < 100]), n // 2)
+    pdfs = random.sample(list([k for k, v in fn_to_page_count.items() if 2 <= v <= 100]), n // 2)
     hn_row_idxs = random.sample(range(len(dataset)), n // 2)
 
     # sample one system prompt for each pdf
@@ -52,17 +53,18 @@ def get_ds(dataset: Dataset, n: int) -> Dataset:
     )
     system_prompts = [prompt_sampler.generate_prompt() for _ in range(len(pdfs) + len(hn_row_idxs))]
 
-    ifn_col = dataset['image_filename']
+    images_ds = load_from_disk(IMAGES_DS_PATH)
+    ifn_col = images_ds['image_filename']
     def sample_max_n_neg_fns(row_idx: int, n: int) -> list[str]:
         row = dataset[row_idx]
-        negs = row['hard_negatives_idx_img_img'] + row['hard_negatives_idx_txt_img']
-        negs = random.sample(negs, k=random.randint(min(5, n), min(n, len(negs))))
+        negs = row['hard_negs_idx_img_img'] + row['hard_negs_idx_txt_img']
+        negs = random.sample(negs, k=random.randint(min(5, n, len(negs)), min(n, len(negs))))
         return [ifn_col[neg] for neg in negs]
 
     hn_rows = []
     for system_prompt, row_idx, row_id in zip(system_prompts[len(pdfs):], hn_row_idxs, range(len(pdfs), len(pdfs) + len(hn_row_idxs))):
         hn_rows.append({
-            'source': [ifn_col[row_idx]],
+            'source': [dataset[row_idx]['image_filename']],
             'count_system': system_prompt,
             'row_id': row_id,
         })
@@ -99,9 +101,9 @@ def run_pipeline(config: Config):
     assert len(stages) == 1 and (lm_configs.system_template_path == stages[0].default_system_template_path for lm_configs in stages[0].lm_configs)
 
     dataset = load_from_disk(DS_PATH)
-    # dataset = get_ds(2_000_000)
-    dataset = get_ds(dataset, 2)
-    dataset = utils.remove_pdfs_from_dataset(dataset, EXCLUDE_PDFS)
+    dataset = get_ds(dataset, 100_000)
+    # dataset = get_ds(dataset, 2)
+    dataset = utils.remove_pdfs_from_dataset(dataset, EXCLUDE_PDFS, row_to_ifn=lambda row: row['source'][0])
 
     with Pipeline(
         name='sum_count',
@@ -127,7 +129,7 @@ def run_pipeline(config: Config):
                 input_batch_size=BATCH_SIZE,
                 resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.tp_size),
                 output_mappings={'model_name': 'count_model_name'},
-                invalidate_cache=True,
+                # invalidate_cache=True,
                 **lm.lm_config.task_kwargs,
             )
             for i, lm in enumerate(lms)
@@ -157,7 +159,9 @@ def run_pipeline(config: Config):
             )
         ),
         use_cache=True,
-        invalidate_distiset=False,
+        invalidate_distiset=True,
+        use_fs_to_pass_data=True,
+
     )
     return distiset
 
@@ -165,4 +169,4 @@ if __name__ == '__main__':
     distiset: Dataset = run_pipeline(config)['default']['train']
     distiset = distiset.remove_columns(['distilabel_metadata'])  # don't need this for this pipeline
     distiset = format_distiset(distiset)
-    distiset.save_to_disk(Path(CACHE_DIR) / 'sum_count_ds')
+    distiset.save_to_disk(CACHE_DIR / 'sum_count_ds')
