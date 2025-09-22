@@ -78,6 +78,7 @@ IMAGES_DS_PATH = work_dir / 'data' / 'all_pdfs_images_ds'
 PDF_ROOT = scratch_dir / 'pdfs'
 CACHE_DIR = scratch_dir / 'distilabel/out'
 AVAILABLE_GPUS = [0, 1, 2, 3]
+PATH_SUBSTITUTION = ('/lustre/fsn1/projects/rech/eya/uzj46do/pdfs/', '/mnt/nfs/pdfs/')
 
 stages = [
     # Stage 0: Transcribe the page
@@ -94,7 +95,7 @@ stages = [
                 tp_size=None,
                 replicas=32,
                 vllm_kwargs={
-                    'limit-mm-per-prompt': "'{\"image\": 64}'", 
+                    'limit-mm-per-prompt': "'{\"image\": 336}'", 
                     'quantization': 'fp8',
                     'max-model-len': '96000',
                     'gpu-memory-utilization': 0.95,
@@ -102,7 +103,6 @@ stages = [
                 out_model=None,
                 system_template_path='distilabel/prompts/transcribe.txt',
                 prompt_sampler_config=PromptSamplerConfig(),
-                path_substitution=('/mnt/nfs/pdfs/', '/lustre/fsn1/projects/rech/eya/uzj46do/pdfs/'),
             ),
         ],
         available_gpus=AVAILABLE_GPUS,
@@ -121,7 +121,7 @@ stages = [
                 tp_size=None,
                 replicas=32,
                 vllm_kwargs={
-                    'limit-mm-per-prompt': "'{\"image\": 64}'", 
+                    'limit-mm-per-prompt': "'{\"image\": 336}'", 
                     'quantization': 'fp8',
                     'max-model-len': '96000',
                     'gpu-memory-utilization': 0.95,
@@ -148,7 +148,7 @@ stages = [
                 tp_size=None,
                 replicas=32,
                 vllm_kwargs={
-                    'limit-mm-per-prompt': "'{\"image\": 64}'", 
+                    'limit-mm-per-prompt': "'{\"image\": 336}'", 
                     'quantization': 'fp8',
                     'max-model-len': '96000',
                     'gpu-memory-utilization': 0.95,
@@ -156,7 +156,6 @@ stages = [
                 out_model='PosExtraction',
                 system_template_path='distilabel/prompts/pos_extraction.txt',
                 prompt_sampler_config=pos_extraction_ps,
-                path_substitution=('/mnt/nfs/pdfs/', '/lustre/fsn1/projects/rech/eya/uzj46do/pdfs/'),
             ),
         ],
         available_gpus=AVAILABLE_GPUS,
@@ -164,5 +163,5 @@ stages = [
     ),
 ]
 
-config = Config(stages=stages, use_running_vllm=True)
+config = Config(stages=stages, use_running_vllm=True, path_substitution=PATH_SUBSTITUTION)
 

@@ -1,0 +1,22 @@
+Stitch the three micro-personas (before, during, after) into one coherent persona who spans setup → action → validation. Make it natural and generalizable beyond the specific page.
+
+Constraints:
+- No page identifiers or quotes.
+- Keep values concise and concrete (short phrases).
+- The persona should be able to ask multi-step questions later, not tied to a single page.
+
+Output ONLY this JSON object:
+{{
+  "persona": {{
+    "name": str,
+    "role": str,
+    "industry": str,
+    "journey_summary": str,
+    "goals_now": list[str],
+    "success_criteria": list[str],
+    "risks": list[str],
+    "collaborators": list[str],
+    "communication_style": list[str],
+    "question_motives": list[str]
+  }}
+}} 

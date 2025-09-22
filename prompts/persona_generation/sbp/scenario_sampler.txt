@@ -1,0 +1,29 @@
+You will receive a single page from a larger document as image context. Infer 5 plausible real-world scenarios in which a human would consult a document that contains a page like this.
+
+Goals:
+- Generalize beyond visible specifics. No copying numbers, identifiers, or names.
+- Cover diverse roles, industries, seniority, and motives (decision, compliance, troubleshooting, procurement, learning).
+- Each scenario should be self-contained and natural for a human asking an LM questions later.
+- Use abstract signals derived from the page (e.g., "has tables", "mentions KPIs", "contains code snippet"), not page quotes.
+
+Hard requirements:
+- DO NOT reference page indices or sections by number.
+- Avoid product/version or proper-noun coupling.
+- Keep fields concrete and short, no nested JSON except lists.
+
+Output ONLY this JSON object:
+{{
+  "scenarios": [
+    {{
+      "title": str,
+      "actor_role": str,                 
+      "org_context": str,                
+      "trigger_event": str,              
+      "objective": str,                  
+      "constraints": list[str],          
+      "time_pressure": "low|medium|high",
+      "evidence_signals_from_page": list[str]
+    }},
+    ... (total 5)
+  ]
+}} 

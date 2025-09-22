@@ -40,17 +40,21 @@ def compute_tokens(
 
 def prepare_output(
     generations: "LLMOutput",
+    reasoning_generations: Optional[List[str]] = None,
     input_tokens: Optional[List[int]] = None,
     output_tokens: Optional[List[int]] = None,
     logprobs: Optional["LLMLogprobs"] = None,
+    cache_hit: Optional[List[bool | None]] = None,
 ) -> "GenerateOutput":
     """Helper function to prepare the output of the LLM.
 
     Args:
         generations: The outputs from an LLM.
+        reasoning_generations: The reasoning outputs from an LLM. Defaults to `None`.
         input_tokens: The number of tokens of the inputs. Defaults to `None`.
         output_tokens: The number of tokens of the LLM response. Defaults to `None`.
         logprobs: The logprobs of the LLM response. Defaults to `None`.
+        cache_hit: Whether the response is from cache. Defaults to `None`.
 
     Returns:
         Output generation from an LLM.
@@ -60,6 +64,11 @@ def prepare_output(
         "statistics": {},
     }
 
+    if reasoning_generations:
+        output["reasoning_generations"] = reasoning_generations
+    else:
+        output["reasoning_generations"] = [None] * len(generations)
+
     if input_tokens:
         output["statistics"]["input_tokens"] = input_tokens
 
@@ -68,4 +77,8 @@ def prepare_output(
 
     if logprobs:
         output["logprobs"] = logprobs
+    
+    if cache_hit:
+        output["cache_hit"] = cache_hit
+    
     return output

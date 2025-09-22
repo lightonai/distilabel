@@ -35,5 +35,7 @@ class Map(Step):
         return self.cols + self.output_cols
 
     def process(self, *inputs: StepInput) -> "StepOutput":
+        out = []
         for step_input in inputs:
-            yield [{**row, **self.fn(**row, output_cols=self.output_cols)} for row in step_input]
+            out.extend([{**row, **self.fn(**row, output_cols=self.output_cols)} for row in step_input])
+        yield out

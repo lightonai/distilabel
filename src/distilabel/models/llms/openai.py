@@ -270,6 +270,7 @@ class OpenAILLM(OpenAIBaseClient, AsyncLLM):
             input_tokens=statistics["input_tokens"],
             output_tokens=statistics["output_tokens"],
             logprobs=logprobs,
+            cache_hit=[False] * len(generations),
         )
 
     def _get_logprobs_from_completion_choice(
@@ -361,6 +362,7 @@ class OpenAILLM(OpenAIBaseClient, AsyncLLM):
                 input_tokens=statistics["input_tokens"],
                 output_tokens=statistics["output_tokens"],
                 logprobs=output_logprobs,
+                cache_hit=[False],
             )
 
         return self._generations_from_openai_completion(completion)
@@ -377,6 +379,7 @@ class OpenAILLM(OpenAIBaseClient, AsyncLLM):
             A list of strings containing the generated responses for the input.
         """
         generations = []
+        reasoning_generations = []
         logprobs = []
         for choice in completion.choices:
             if (content := choice.message.content) is None:
@@ -385,6 +388,8 @@ class OpenAILLM(OpenAIBaseClient, AsyncLLM):
                     f" Finish reason was: {choice.finish_reason}"
                 )
             generations.append(content)
+            if getattr(choice.message, 'reasoning_content', None):
+                reasoning_generations.append(choice.message.reasoning_content)
             if choice_logprobs := self._get_logprobs_from_chat_completion_choice(
                 choice
             ):
@@ -393,9 +398,11 @@ class OpenAILLM(OpenAIBaseClient, AsyncLLM):
         statistics = self._get_llm_statistics(completion)
         return prepare_output(
             generations=generations,
+            reasoning_generations=reasoning_generations,
             input_tokens=statistics["input_tokens"],
             output_tokens=statistics["output_tokens"],
             logprobs=logprobs,
+            cache_hit=[False] * len(generations),
         )
 
     def _get_logprobs_from_chat_completion_choice(

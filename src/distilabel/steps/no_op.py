@@ -33,5 +33,7 @@ class NoOp(Step):
         return self.cols
 
     def process(self, *inputs: StepInput) -> 'StepOutput':
+        out = []
         for step_input in inputs:
-            yield step_input
+            out.extend(step_input)
+        yield out

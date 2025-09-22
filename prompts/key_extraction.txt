@@ -10,5 +10,5 @@ Also ensure that you copy the full contents to the extraction.
 Here is the output format, provide nothing except this in your response:
 {{
     "chain_of_thought": str,
-    "extraction": str,
+    "extraction": str
 }}

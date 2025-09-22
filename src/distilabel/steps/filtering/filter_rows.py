@@ -45,11 +45,13 @@ class FilterRows(Step):
 
     @_timer.time_it
     def process(self, *inputs: StepInput) -> 'StepOutput':  
+        out = []
         for step_input in inputs:
-            yield [
+            out.extend([
                 row for row in step_input
                 if (
                     self.condition(row, self.cols) if self.cols is not None 
                     else self.condition(row)  # allow specifying cols with partial or taking the whole row
                 )
-            ]
+            ])
+        yield out

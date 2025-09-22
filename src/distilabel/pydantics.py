@@ -1,7 +1,7 @@
 from pydantic import BaseModel, model_validator, Field
 from pathlib import Path as pth
 import sys
-from typing import Any
+from typing import Any, Literal
 
 from distilabel import utils
 
@@ -73,10 +73,8 @@ class LMConfig(BaseModel):
     lm_response_cache_root: pth = Field(default_factory=pth)
     '''root directory for the lm response cache, set by the step when created'''
 
-    path_substitution: tuple[str, str] | None = None
-    '''
-    if a tuple, will call str.replace(substitution[0], substitution[1]) on any paths in the source column
-    '''
+    _path_substitution: tuple[str, str] | None = None
+    '''set by the config'''
 
     def model_post_init(self, context) -> None:
         if isinstance(self.out_model, str):
@@ -127,6 +125,17 @@ class Config(BaseModel):
     You can also set the VLLM_API_BASE_URL environment variable to the base url of the vllm server and set up e.g. multi-node vllm servers
     behind an nginx proxy to scale to multiple nodes
     '''
+    path_substitution: tuple[str, str] | None = None
+    '''
+    if a tuple, will call str.replace(substitution[0], substitution[1]) on any paths in the source column
+    '''
+    @model_validator(mode='after')
+    def apply_default_path_substitution(self) -> 'Config':
+        for stage in self.stages:
+            for lm_config in stage.lm_configs:
+                if lm_config._path_substitution is None:
+                    lm_config._path_substitution = self.path_substitution
+        return self
 
 class CoT(BaseModel):
     chain_of_thought: str
@@ -175,3 +184,85 @@ class PosExtraction(CoT):
 
 class ThinkingCount(CoT):
     count: int
+
+class EvidenceInChunks(BaseModel):
+    evidence: str
+    relevant: bool
+    relevance_score: float
+
+class Persona(CoT):
+    persona: str
+
+class SBPScenario(BaseModel):
+    title: str
+    actor_role: str
+    org_context: str
+    trigger_event: str
+    objective: str
+    constraints: list[str]
+    time_pressure: Literal['low', 'medium', 'high']
+    evidence_signals_from_page: list[str]
+
+class SBPScenarios(BaseModel):
+    scenarios: list[SBPScenario]
+
+class SBPPersona(BaseModel):
+    name: str
+    role: str
+    industry: str
+    org_size: Literal['startup', 'smb', 'mid', 'enterprise', 'public-sector', 'ngo']
+    seniority: Literal['junior', 'mid', 'senior', 'exec']
+    domain_knowledge_level: Literal['novice', 'competent', 'expert']
+    current_goal: str
+    longer_term_goal: str
+    pain_points: list[str]
+    decision_factors: list[str]
+    constraints: list[str]
+    info_seeking_style: list[str]
+    communication_tone: list[str]
+    question_motives: list[str]
+    distance_from_page: float
+
+class SBPSelectAndBackcast(BaseModel):
+    chosen_scenario_title: str
+    persona: SBPPersona
+
+class SBPAudit(BaseModel):
+    page_specificity_risks: list[str]
+    abstraction_moves: list[str]
+    generality_score: int
+    rewrite_guidance: str
+
+class SBPRewritePersona(BaseModel):
+    persona: SBPPersona
+
+class PersonaText(BaseModel):
+    persona: str
+
+class UJSMicroPersona(BaseModel):
+    role: str
+    goal: str
+    concerns: list[str]
+    knowledge: Literal['novice', 'competent', 'expert']
+
+class UJSMicroPersonas(BaseModel):
+    before: UJSMicroPersona
+    during: UJSMicroPersona
+    after: UJSMicroPersona
+
+class UJSPersona(BaseModel):
+    name: str
+    role: str
+    industry: str
+    journey_summary: str
+    goals_now: list[str]
+    success_criteria: list[str]
+    risks: list[str]
+    collaborators: list[str]
+    communication_style: list[str]
+    question_motives: list[str]
+
+class UJSConstraints(BaseModel):
+    constraints: list[str]
+    preferences: list[str]
+    forbidden_page_ties: list[str]

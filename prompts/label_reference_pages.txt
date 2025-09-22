@@ -4,5 +4,5 @@ Also estimate the number of words on the page.
 Here is the output format, provide nothing except this:
 {{
   "is_references_page": bool,
-  "word_count": int,
+  "word_count": int
 }}

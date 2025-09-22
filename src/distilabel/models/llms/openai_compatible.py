@@ -82,7 +82,7 @@ def _format_one_input(args) -> 'ChatType':
         return messages
 
     if isinstance(messages[-1]['content'], list):
-        messages[-1]['content'].append({'type': 'text', 'text': prefixes_content})
+        messages[-1]['content'].extend(prefixes_content)
     elif isinstance(messages[-1]['content'], str):
         messages[-1]['content'] = [{'type': 'text', 'text': messages[-1]['content']}, *prefixes_content]
     else:
@@ -100,14 +100,16 @@ class VLM:
     _executor: "ProcessPoolExecutor | None" = PrivateAttr(default=None)
 
     def format_input(self, input: dict, system_col: str | None, lm_input_cols: list[str], lm_input_col_prefixes: list[str]) -> 'ChatType':
-        system = self.prompt_sampler.generate_prompt() if system_col is None else input[system_col]
+        system = self.prompt_sampler.generate_prompt(
+            seed=utils.hash_structure_with_images(input)
+        ) if system_col is None else input[system_col]
         input |= {'system': system}  # inplace update the input to sneak it into the format_output of LMGenerationTask
         return _format_one_input((
             input,
             system,
             lm_input_cols,
             lm_input_col_prefixes,
-            self.lm_config.path_substitution,
+            self.lm_config._path_substitution,
             self.stage.max_dims,
             VLM.msg_content_img,
             self._vlm_logger,
@@ -124,7 +126,7 @@ class VLM:
         Format input serially is a big bottleneck due probably to image loading. Parallelizing this is great for throughput.
         '''
         prompts = [
-            self.prompt_sampler.generate_prompt() 
+            self.prompt_sampler.generate_prompt(seed=utils.hash_structure_with_images(input)) 
             if system_col is None else inputs[i][system_col] 
             for i in range(len(inputs))
         ]
@@ -137,7 +139,7 @@ class VLM:
                 system_prompt,
                 lm_input_cols,
                 lm_input_col_prefixes,
-                self.lm_config.path_substitution,
+                self.lm_config._path_substitution,
                 self.stage.max_dims,
                 VLM.msg_content_img,
                 self._vlm_logger
@@ -227,6 +229,7 @@ def lm_cache(agenerate: Callable) -> Callable:
             cached_response = lm_cache_db.get(cache_params)
             if cached_response is not None:
                 self._logger.debug(f"🔍 Cache hit for LM {self.lm_config.path}")
+                cached_response['cache_hit'] = [True] * len(cached_response['generations'])
                 return cached_response
         
         # Generate new result
@@ -272,10 +275,12 @@ def multiple_generations(agenerate: Callable) -> Callable:
         
         return GenerateOutput(
             generations=[result['generations'][0] for result in results],
+            reasoning_generations=[result['reasoning_generations'][0] for result in results],
             statistics={
                 'input_tokens': [result['statistics']['input_tokens'] for result in results],
                 'output_tokens': [result['statistics']['output_tokens'] for result in results],
             },
+            cache_hit=[False] * len(results),
         )
     
     return agenerate_multiple
@@ -296,6 +301,8 @@ def structured_output(agenerate: Callable) -> Callable:
         extra_body: dict[str, Any] | None = None,
     ) -> GenerateOutput:
         self = cast(OpenAILM, self)
+        format_exc = None
+        input_toks, output_toks = 0, 0
         for _ in range(STRUCTURED_OUTPUT_RETRIES):
             ## call the wrapped agenerate
             generate_output = await agenerate(
@@ -306,23 +313,32 @@ def structured_output(agenerate: Callable) -> Callable:
                 temperature=temperature,
                 extra_body=extra_body,
             )
+            input_toks += generate_output['statistics']['input_tokens'][0]
+            output_toks += generate_output['statistics']['output_tokens'][0]
             if self.lm_config.out_model is None:  # allow for no pydantic model
                 return generate_output
             try:
                 # assume only one generation
-                generate_output['generations'][0] = self.lm_config.out_model.model_validate_json(
-                    utils.clean_structured_output(generate_output['generations'][0]), 
-                    strict=True
+                generate_output['generations'][0] = utils.try_model_validate(
+                    self.lm_config.out_model,
+                    generate_output['generations'][0],
+                    strict=True,
                 ).model_dump_json()
                 # if your pydantic model allows extra fields, no worries, they will be dropped
 
+                generate_output['statistics']['input_tokens'] = [input_toks]
+                generate_output['statistics']['output_tokens'] = [output_toks]
                 return generate_output
-            except ValidationError:
+            except Exception as e:
+                format_exc = e
                 continue
         
+        self._logger.warning(f"Failed to format structured output, last example: {generate_output['generations'][0]}\n{format_exc}")
         return GenerateOutput(
             generations=[None],
+            reasoning_generations=[None],
             statistics={'input_tokens': [0], 'output_tokens': [0]},
+            cache_hit=[False],
         )
 
     return agenerate_structured
@@ -413,7 +429,9 @@ class OpenAILM(OpenAILLM, CudaDevicePlacementMixin, VLLMServerPlacementMixin, VL
         '''
         no_response = GenerateOutput(
             generations=[None],
+            reasoning_generations=[None],
             statistics={'input_tokens': [0], 'output_tokens': [0]},
+            cache_hit=[False],
         )
         # in case previous steps somehow gave empty inputs
         if len(input) == 0 or len(input) == 1 and input[0]['content'] in [None, '']:  # nothing for lm to respond to
@@ -424,7 +442,7 @@ class OpenAILM(OpenAILLM, CudaDevicePlacementMixin, VLLMServerPlacementMixin, VL
             completion = await self._aclient.chat.completions.create(
                 model=self.model_name,
                 messages=input,
-                max_tokens=max_new_tokens,
+                max_completion_tokens=max_new_tokens,
                 temperature=temperature,
                 extra_body=extra_body,
             )

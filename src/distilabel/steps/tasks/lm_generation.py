@@ -1,14 +1,19 @@
-from typing import TYPE_CHECKING, Callable, Annotated
+from typing import TYPE_CHECKING, Callable, Annotated, List, Dict, Any, Union
 from functools import partial
 from pydantic import Field, model_validator
 
 from distilabel.steps.tasks import Task
 from distilabel.pydantics import Stage, LMConfig
 
+from distilabel.steps.base import (
+    StepInput,
+)
+
 if TYPE_CHECKING:
     from distilabel.typing import (
         StepColumns,
         ChatType,
+        StepOutput,
     )
 
 class LMGenerationTask(Task):
@@ -55,7 +60,7 @@ class LMGenerationTask(Task):
     @property
     def pydantic_fields(self) -> list[str]:
         if self.lm_config.out_model is None:
-            return ['generation']
+            return ['generation', 'reasoning']
         return list(self.lm_config.out_model.model_fields.keys())
 
     @property
@@ -75,8 +80,8 @@ class LMGenerationTask(Task):
     def parallel_format_inputs(self, inputs: list[dict]) -> list['ChatType']:
         return self.parallel_input_formatter(inputs, self.system_col, self.lm_input_cols, self.lm_input_col_prefixes)
 
-    def format_output(self, output: str | None, input: dict) -> dict:
-        pydantic_output = {'generation': output}
+    def format_output(self, output: str | None, reasoning: str | None, input: dict) -> dict:
+        pydantic_output = {'generation': output, 'reasoning': reasoning}
         if self.lm_config.out_model is not None:
             # if using structured output, split the generation into columns with names from the pydantic model
             none_dict = dict.fromkeys(self.pydantic_fields)
@@ -84,3 +89,10 @@ class LMGenerationTask(Task):
 
             pydantic_output = load_pydantic(output).model_dump() if output is not None else none_dict
         return {**pydantic_output, 'source': input['source'], 'system': input['system']}
+
+    def process(self, inputs: StepInput) -> "StepOutput":  # type: ignore
+        results = next(super().process(inputs))
+        n_failed = sum(1 for result in results if any(result[k] is None for k in self.pydantic_fields if k != 'reasoning'))
+        if n_failed > int(0.1 * len(results)):
+            self._logger.warning(f"{n_failed}/{len(results)} outputs have None values in the output fields {self.pydantic_fields} which is more than 10% of the batch")
+        yield results

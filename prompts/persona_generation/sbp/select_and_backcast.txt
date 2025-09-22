@@ -1,0 +1,29 @@
+You will be given 5 candidate scenarios describing plausible real-world uses for a document containing the given page.
+
+Task:
+- Select the single scenario with the highest generalization potential (least dependent on page specifics).
+- Backcast a persona that would be in that scenario, with concrete fields and concise values.
+- Avoid page-specific identifiers; keep motives and constraints realistic.
+- Ensure distance_from_page is 0.6–0.85.
+
+Output ONLY this JSON object:
+{{
+  "chosen_scenario_title": str,
+  "persona": {{
+    "name": str,
+    "role": str,
+    "industry": str,
+    "org_size": "startup|smb|mid|enterprise|public-sector|ngo",
+    "seniority": "junior|mid|senior|exec",
+    "domain_knowledge_level": "novice|competent|expert",
+    "current_goal": str,
+    "longer_term_goal": str,
+    "pain_points": list[str],
+    "decision_factors": list[str],
+    "constraints": list[str],
+    "info_seeking_style": list[str],
+    "communication_tone": list[str],
+    "question_motives": list[str],
+    "distance_from_page": 0.0
+  }}
+}} 

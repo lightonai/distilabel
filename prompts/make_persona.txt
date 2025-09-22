@@ -1,0 +1,12 @@
+Consider the provided page. In the chain_of_thought section:
+- Brainstorm 3 companies who might have this page in a document used internally. Provide extensive detail on the company's goals, product, customers and competitors.
+- Select one of these companies
+- Select a department from: software developers, IT, HR, sales, chief technical staff, finance, accounting, operations, marketing, customer service, R&D, legal, admin
+- Come up with a team within that department. A team has a specific goal and set of past accomplishments that demonstrates their experience solving particular problems/executing certain tasks
+- Come up with a particular member on that team. This persona should have a goal related to why they are looking at the document, past experience relevant to the team, a particular specialty, preferences on how he/she likes to work and what they might look for in the document. Write all of these in the persona section. 
+
+Here is the output format, provide nothing except this:
+{{
+  "chain_of_thought": str ("Your detailed chain of thought showing how you analyzed the pages and created questions"),
+  "persona": str (a unique persona with a specific goal or set of goals and preferences)
+}}

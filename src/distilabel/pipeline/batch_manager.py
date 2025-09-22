@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import os
-from collections import defaultdict
+from collections import defaultdict, deque
 from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -387,31 +387,28 @@ class _BatchManagerStep(_Serializable):
     def _data_generator_for_convergence_step(self) -> Generator:
         """Creates an generator that yields data for the convergence step."""
         grouped_batches = self._group_batches_by_created_from()
-        
+
         n_selected_rows = 0
         selected_data = defaultdict(list)
         batches_used = defaultdict(list)
+
         for seq_no, batches in grouped_batches:
-            remaining_rows = 0
             for batch, _ in batches:
-                if n_selected_rows != self.input_batch_size:
-                    batch_data = batch.get_data(self.input_batch_size - n_selected_rows)
-                    selected_data[batch.step_name].extend(batch_data)
-                    n_selected_rows += len(batch_data)
+                while batch.num_rows() > 0:
+                    if n_selected_rows != self.input_batch_size:
+                        batch_data = batch.get_data(self.input_batch_size - n_selected_rows)
+                        selected_data[batch.step_name].extend(batch_data)
+                        n_selected_rows += len(batch_data)
 
-                    # Keep track of the batches used to create the batch
-                    batches_used[batch.step_name].append((batch.seq_no, batch.size, len(batch_data)))
+                        # Keep track of the batches used to create the batch
+                        if len(batch_data) > 0:
+                            batches_used[batch.step_name].append((batch.seq_no, batch.size, len(batch_data)))
 
-                remaining_rows += batch.num_rows()
-
-                if batch.num_rows() == 0:
-                    self.data[batch.step_name].remove(batch)
-
-            if n_selected_rows == self.input_batch_size:
-                yield list(selected_data.values()), dict(batches_used)
-                n_selected_rows = 0
-                selected_data = defaultdict(list)
-                batches_used = defaultdict(list)
+                    if n_selected_rows == self.input_batch_size:
+                        yield list(selected_data.values()), dict(batches_used)
+                        n_selected_rows = 0
+                        selected_data = defaultdict(list)
+                        batches_used = defaultdict(list)
 
         yield list(selected_data.values()), dict(batches_used)
         while True:  # old behavior was no return an empty list when there was no data

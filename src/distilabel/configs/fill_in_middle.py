@@ -23,7 +23,7 @@ lm_configs=[
         tp_size=None,
         replicas=32,
         vllm_kwargs={
-            'limit-mm-per-prompt': "'{\"image\": 64}'", 
+            'limit-mm-per-prompt': "'{\"image\": 336}'", 
             'quantization': 'fp8',
             'max-model-len': '96000',
             'gpu-memory-utilization': 0.95,
@@ -31,13 +31,13 @@ lm_configs=[
         out_model=None,
         system_template_path='distilabel/prompts/transcribe.txt',
         prompt_sampler_config=PromptSamplerConfig(),
-        path_substitution=('/mnt/nfs/pdfs/', '/lustre/fsn1/projects/rech/eya/uzj46do/pdfs/'),
     ),
 ]
 
 work_dir = Path('/lustre/fswork/projects/rech/eya/uzj46do/')
 scratch_dir = Path('/lustre/fsn1/projects/rech/eya/uzj46do/')
 
+PATH_SUBSTITUTION = ('/lustre/fsn1/projects/rech/eya/uzj46do/pdfs/', '/mnt/nfs/pdfs/')
 EXCLUDE_PDFS = set((work_dir / 'distilabel/bench_pdfs.txt').read_text().splitlines())
 DS_PATH = work_dir / 'data' / 'scraped_and_pdfa'
 IMAGES_DS_PATH = work_dir / 'data' / 'all_pdfs_images_ds'
@@ -53,5 +53,5 @@ stages = [
     ),
 ]
 
-config = Config(stages=stages, use_running_vllm=True)
+config = Config(stages=stages, use_running_vllm=True, path_substitution=PATH_SUBSTITUTION)
 

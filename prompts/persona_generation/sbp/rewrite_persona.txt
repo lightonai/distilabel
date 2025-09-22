@@ -1,0 +1,31 @@
+You will rewrite the persona to reduce page-specific coupling while preserving intent.
+
+Apply:
+- All provided abstraction_moves
+- The rewrite_guidance
+
+Constraints:
+- Keep the same fields and value styles.
+- Raise distance_from_page to 0.75–0.9 if it is < 0.75, otherwise keep as is.
+- Do not introduce any identifiers or quotes from the page.
+
+Output ONLY this JSON object:
+{{
+  "persona": {{
+    "name": str,
+    "role": str,
+    "industry": str,
+    "org_size": "startup|smb|mid|enterprise|public-sector|ngo",
+    "seniority": "junior|mid|senior|exec",
+    "domain_knowledge_level": "novice|competent|expert",
+    "current_goal": str,
+    "longer_term_goal": str,
+    "pain_points": list[str],
+    "decision_factors": list[str],
+    "constraints": list[str],
+    "info_seeking_style": list[str],
+    "communication_tone": list[str],
+    "question_motives": list[str],
+    "distance_from_page": 0.0
+  }}
+}} 

@@ -22,19 +22,28 @@ class PromptSampler:
         self.cfg = cfg
         self.template = template
 
-    def sample_kwarg(self, dist: CategoricalDist):
+    def sample_kwarg(self, dist: CategoricalDist, seed: int | None = None):
         kwargs = []
+        if seed is not None:
+            rng = random.Random(seed)
+        else:
+            rng = random.Random()
         for i in range(dist.samples_per_prompt):
             values, probabilities = zip(*dist.choices)
-            sampled_value = random.choices(values, probabilities)[0]
-            if pth(sampled_value).exists() and pth(sampled_value).suffix == ".txt":
-                sampled_value = pth(sampled_value).read_text()
+            sampled_value = rng.choices(values, probabilities)[0]
+            try:
+                if pth(sampled_value).exists() and pth(sampled_value).suffix == ".txt":
+                    sampled_value = pth(sampled_value).read_text()
+            except Exception as e:
+                # e.g. values which are too long throw an OSError when checking existence
+                # or a ValueError
+                pass
             kwargs.append(sampled_value)
         if dist.samples_per_prompt == 1:
             return kwargs[0]
         return kwargs
 
-    def sample(self) -> dict[str, Any]:
+    def sample(self, seed: int | None = None) -> dict[str, Any]:
         '''Sample the kwargs for a prompt according to the prompt sampler config'''
         dists = deepcopy(self.cfg.distributions)
         if self.cfg.samples_per_prompt_kwarg:
@@ -49,14 +58,14 @@ class PromptSampler:
         # sample pre-requisites
         kwargs = {}
         for kwarg in prereq_kwargs:
-            kwargs[kwarg] = self.sample_kwarg(dists[kwarg])
+            kwargs[kwarg] = self.sample_kwarg(dists[kwarg], seed)
 
         # sample post-requisites, pulling the samples_per_prompt from the pre-requisites[samples_per_prompt_kwarg]
         post_req_samples_per_prompt = int(kwargs.get(self.cfg.samples_per_prompt_kwarg, 1))
         if len(post_req_kwargs) > 0:
             for kwarg in post_req_kwargs:
                 dists[kwarg].samples_per_prompt = post_req_samples_per_prompt
-                kwargs[kwarg] = self.sample_kwarg(dists[kwarg])
+                kwargs[kwarg] = self.sample_kwarg(dists[kwarg], seed)
 
         # this is just formatting, if you want to say generate a list of questions, you may want to also specify details of the question for each,
         # then, you wouldn't want to have two sections of the system prompt where the first says what type for each and the second says what 
@@ -79,8 +88,8 @@ class PromptSampler:
         # now has each normal one ready to insert, side by side ones broadcasted and all list likes jsonified 
         return kwargs
 
-    def generate_prompt(self) -> str:
+    def generate_prompt(self, seed: int | None = None) -> str:
         '''Format the template with the sampled kwargs'''
-        return self.template.format(**self.sample())
+        return self.template.format(**self.sample(seed))
 
 

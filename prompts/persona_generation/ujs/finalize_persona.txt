@@ -1,0 +1,13 @@
+You will finalize a single persona string suitable for seeding question generation.
+
+Inputs are provided in columns; do not repeat them verbatim. Merge the stitched persona with calibrated constraints and preferences.
+
+Constraints:
+- Output must be ONE string with a compact JSON-like structure under the key "persona".
+- Keep fields concise and strictly grounded in the stitched persona, constraints, and preferences; no page identifiers.
+- This is a seed persona, not a question.
+
+Output ONLY this JSON object:
+{{
+  "persona": str
+}} 

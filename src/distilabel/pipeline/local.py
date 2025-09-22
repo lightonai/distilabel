@@ -43,6 +43,7 @@ from distilabel.utils.logging import setup_logging, stop_logging
 from distilabel.utils.ray import script_executed_in_ray_cluster
 from distilabel import constants
 from distilabel.pipeline.tracking_queue import TrackingQueue
+from distilabel.utils.misc import save_json
 
 if TYPE_CHECKING:
     import logging
@@ -160,7 +161,7 @@ class Pipeline(BasePipeline):
         dataset: Optional["InputDataset"] = None,
         dataset_batch_size: int = 50,
         logging_handlers: Optional[List["logging.Handler"]] = None,
-    ) -> "Distiset":
+    ) -> Tuple["Distiset", Dict[str, float]]:
         """Runs the pipeline.
 
         Args:
@@ -199,7 +200,7 @@ class Pipeline(BasePipeline):
                 can be extracted and used in a different context. Defaults to `None`.
 
         Returns:
-            The `Distiset` created by the pipeline.
+            A tuple with the `Distiset` created by the pipeline and the cost tracker.
 
         Raises:
             RuntimeError: If the pipeline fails to load all the steps.
@@ -217,7 +218,7 @@ class Pipeline(BasePipeline):
 
         self._log_queue = cast("Queue[Any]", mp.Queue())
         
-        if (distiset := super().run(
+        if (distiset_and_tracker := super().run(
             parameters=parameters,
             load_groups=load_groups,
             use_cache=use_cache,
@@ -228,14 +229,14 @@ class Pipeline(BasePipeline):
             dataset_batch_size=dataset_batch_size,
             logging_handlers=logging_handlers,
         )) is not None:
-            return distiset
+            return distiset_and_tracker[0], distiset_and_tracker[1]
 
         self._managers = {}
         num_processes = self.dag.get_total_replica_count()
         with (
             mp.Manager() as manager,
             _NoDaemonPool(
-                num_processes * 2,  # extra processes in case
+                int(num_processes * 1.2),  # extra processes in case
                 initializer=_init_worker,
                 initargs=(
                     self._log_queue,
@@ -272,10 +273,11 @@ class Pipeline(BasePipeline):
 
         if self.use_cache:
             distiset.save_to_disk(self._cache_location["distiset"])
+            save_json(self._cache_location["cost_tracker"], self.cost_tracker)
 
         stop_logging()
 
-        return distiset
+        return distiset, self.cost_tracker
 
     def QueueClass(self, name: str) -> TrackingQueue:
         """Factory for queues used by steps (now `TrackingQueue`)."""
@@ -377,7 +379,7 @@ class Pipeline(BasePipeline):
             return
 
         # Global step with successors failed
-        self._logger.error(f"An error occurred in global step '{step_name}'")
+        self._logger.error(f"An error occurred in step '{step_name}'")
         self._logger.error(f"Subprocess traceback:\n\n{e.formatted_traceback}")
 
         self._stop()

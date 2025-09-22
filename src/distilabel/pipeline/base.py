@@ -43,6 +43,9 @@ from upath import UPath
 import time
 
 from distilabel import __version__, constants, envs
+from distilabel.constants import (
+    LAST_BATCH_ROUTED_FLAG,
+)
 from distilabel.distiset import create_distiset
 from distilabel.errors import DistilabelUserError
 from distilabel.mixins.requirements import RequirementsMixin
@@ -51,8 +54,10 @@ from distilabel.pipeline.batch import _Batch
 from distilabel.pipeline.batch_manager import _BatchManager
 from distilabel.pipeline.write_buffer import _WriteBuffer
 from distilabel.steps.base import GeneratorStep, _Step
+from distilabel.steps.tasks.base import _Task
 from distilabel.steps.generators.utils import make_generator_step
 from distilabel.utils.logging import setup_logging, stop_logging
+from distilabel.utils.misc import load_json
 from distilabel.utils.notebook import in_notebook
 from distilabel.utils.serialization import (
     _Serializable,
@@ -266,6 +271,9 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
         self._generator_sent_and_received: Dict[str, Tuple[int, int]] = defaultdict(lambda: [0, 0])
         '''tracks number of rows sent from a generator step and the amount of those that have been processed'''
 
+        self.cost_tracker: Dict[str, float] = defaultdict(float)
+        '''tracks the cost of each lm for each step'''
+
         # For logging deltas
         self.track_batches = (
             os.environ.get("DISTILABEL_LOG_LEVEL") == "DEBUG"
@@ -339,7 +347,7 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
         dataset: Optional["InputDataset"] = None,
         dataset_batch_size: int = 50,
         logging_handlers: Optional[List[logging.Handler]] = None,
-    ) -> "Distiset":  # type: ignore
+    ) -> Tuple["Distiset", Dict[str, float]]:  # type: ignore
         """Run the pipeline. It will set the runtime parameters for the steps and validate
         the pipeline.
 
@@ -382,7 +390,7 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
                 can be extracted and used in a different context. Defaults to `None`.
 
         Returns:
-            The `Distiset` created by the pipeline.
+            A tuple with the `Distiset` created by the pipeline and the cost tracker.
         """
         self.use_cache = use_cache
         self.invalidate_distiset = invalidate_distiset
@@ -448,15 +456,13 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
             and self._cache_location["distiset"].exists()
         ):  # type: ignore
             from distilabel.distiset import Distiset
-            self._logger.info(
-                "💾 Loaded batch manager from cache doesn't contain any remaining data."
-                " Returning `Distiset` from cache data..."
-            )
+            self._logger.info("💾 Returning `Distiset` from cache data...")
+            self.cost_tracker = load_json(self._cache_location["cost_tracker"])
             distiset = Distiset.load_from_disk(self._cache_location["distiset"])
             if self._timer._enabled:
                 self._logger.info(self._timer.get_summary())
             stop_logging()
-            return distiset
+            return distiset, self.cost_tracker
 
         self._setup_write_buffer(use_cache)
 
@@ -900,6 +906,7 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
             "distiset": folder / "distiset",
             "batches_cache": self._cache_dir / "batches_cache",  # shared even across different pipeline executions
             "lm_cache": self._cache_dir / "lm_cache",
+            "cost_tracker": folder / "cost_tracker.json",
         }
 
     @property
@@ -1125,6 +1132,8 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
             )
             batch.read_batch_data_from_fs()
 
+        self._track_cost(batch)
+
         if batch.step_name in self.dag.leaf_steps:
             self._write_buffer.add_batch(batch)  # type: ignore
 
@@ -1154,6 +1163,20 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
             for step_name in steps_to_kill:
                 if self._is_step_running(step_name):
                     self._send_last_batch_flag_to_step(step_name)
+
+    def _track_cost(self, batch: "_Batch") -> None:
+        """Tracks the cost of the batch."""
+        if len(batch.data[0]) == 0 or batch.data[0][0].get('cost') is None:
+            return
+        batch_cost = sum(row.get('cost', 0.0) for row in batch.data[0])
+        # remove cost from the batch data since steps that change the number of rows
+        # will make the total cost incorrect
+        batch.data[0] = [{k: v for k, v in row.items() if k != 'cost'} for row in batch.data[0]]
+        step: "_Task" = self.dag.get_step(batch.step_name)[constants.STEP_ATTR_NAME]
+        self.cost_tracker[f'{step.name}_{step.llm.model_name}'] += batch_cost
+        self._logger.debug(
+            f"Batch {batch.seq_no} from {step.name} with llm {step.llm.model_name} cost {batch_cost}"
+        )
 
     def _set_step_for_recovering_offline_batch_generation(
         self, step: "_Step", data: List[List[Dict[str, Any]]]
@@ -1207,6 +1230,7 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
         batch.write_batch_data_to_fs(self._fs, base_path)  # type: ignore
         self._batch_manager.add_batch(successor, batch)
 
+    @_timer.time_it
     def _register_stages_last_batch(self, step_name: str) -> None:
         """Registers the last batch received from a step in the `_stages_last_batch`
         dictionary.
@@ -1647,7 +1671,7 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
             # Copy batch to avoid modifying the same reference in the batch manager
             batch_to_add = batch.copy() if len(route_to) > 1 else batch
 
-            if self._use_fs_to_pass_data:
+            if self._use_fs_to_pass_data or batch_to_add.data_path is not None:
                 self._batch_manager_add_fs_batch(successor, batch_to_add)
             else:
                 self._batch_manager.add_batch(successor, batch_to_add)
@@ -1743,12 +1767,34 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
             conv_step = list(self.dag.get_step_successors(batch.step_name))[0]
             self._batch_manager.set_convergence_step_receives_from(conv_step, batch.step_name)
             if batch.last_batch:
-                self._batch_manager.set_convergence_step_receives_from(conv_step, 'last_batch_routed')
-                route_steps_used = self._batch_manager.convergence_step_receives_from(conv_step)
-                co_route_steps = list(self.dag.get_step_predecessors(conv_step))
-                for route_step in [s for s in co_route_steps if s not in route_steps_used]:
-                    self._register_stages_last_batch(route_step)
-                    self._batch_manager.update_not_routed(route_step)
+                self._notify_convergence_steps_of_last_batch(batch.step_name)
+
+    def _notify_convergence_steps_of_last_batch(self, receiving_route_step: str) -> None:
+        """Notify convergence steps of the last batch.
+
+        This receives the route step that the last batch is being routed to,
+        then updates all convergence steps of the routing step (the one who sent the routed batch)
+        that the last batch has been routed. This allows them to check that they have received 
+        the number of batches they are expecting and proceed with execution.
+
+        You will usually only have one convergence step per routing step, but if you use a 
+        `routing_batch_function` to route to multiple branches, then you will have that many convergence steps,
+        all of which will be notified of the last batch.
+        """
+        # expecting only one predecessor, ensured in _dag._validate_routing_batch_function
+        routing_step = list(self.dag.get_step_predecessors(receiving_route_step))[0]
+        route_steps = list(self.dag.get_step_successors(routing_step))
+        conv_steps = {
+            list(self.dag.get_step_successors(route_step))[0]
+            for route_step in route_steps
+        }
+        for conv_step in conv_steps:
+            self._batch_manager.set_convergence_step_receives_from(conv_step, LAST_BATCH_ROUTED_FLAG)
+            route_steps_used = self._batch_manager.convergence_step_receives_from(conv_step)
+            co_route_steps = list(self.dag.get_step_predecessors(conv_step))
+            for route_step in [s for s in co_route_steps if s not in route_steps_used]:
+                self._register_stages_last_batch(route_step)
+                self._batch_manager.update_not_routed(route_step)
 
     @_timer.time_it
     def _clear_batch_manager_route_steps(self, successors: List[str]) -> None:

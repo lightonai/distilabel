@@ -119,6 +119,11 @@ class _StepWrapper:
         except Exception as e:
             if self._loaded:
                 self.step.unload()
+            
+            self.step._logger.error(
+                f"Error in step '{self.step.name}' (replica ID: {self.replica}): {e}\n"
+                f"{traceback.format_exc()}"
+            )
 
             # if it's not a load error, we need to notify unload.
             if not (isinstance(e, _StepWrapperException) and e.is_load_error):
@@ -272,7 +277,6 @@ class _StepWrapper:
             # Since only one of the route steps will receive a batch with last_batch = True, if this step is a route step, 
             # it likely won't receive a batch with last_batch = True and needs to create this
             # itself once it knows which batch is actually the last one for it.
-            # Re-inspect the queue after getting the current batch.
             if (
                 self.is_route_step
                 and batch != LAST_BATCH_SENT_FLAG
@@ -291,6 +295,12 @@ class _StepWrapper:
             ):
                 response = _Batch.from_json(cache_key)
                 response.route_step_last_batch = batch.route_step_last_batch
+                response.last_batch = batch.last_batch
+                if len(response.data[0]) == 0:
+                    self.step._logger.warning(
+                        f"Cache hit for batch {batch.seq_no} but response is empty. "
+                        "Consider invalidating the cache or manually removing the cache file."
+                    )
                 self._send_batch(response)
                 self.step._logger.info(f"🔍 Cache hit for batch {batch.seq_no}")
                 if response.last_batch or response.route_step_last_batch:
@@ -311,7 +321,7 @@ class _StepWrapper:
 
             result = []
             try:
-                if self.step.has_multiple_inputs:
+                if self.step.has_multiple_inputs():
                     result = next(step.process_applying_mappings(*batch.data))
                 else:
                     result = next(step.process_applying_mappings(batch.data[0]))
@@ -338,12 +348,17 @@ class _StepWrapper:
                     " Sending empty batch filled with `None`s..."
                 )
                 self.step._logger.warning(
-                    f"Subprocess traceback:\n\n{traceback.format_exc()}"
+                    f"Subprocess traceback:\n{e}\n\n{traceback.format_exc()}"
                 )
             finally:
                 batch.set_data([result])
                 if self.step.use_cache:
-                    batch.cache(cache_key)
+                    if len(result) == 0:
+                        self.step._logger.warning(
+                            f"Batch {batch.seq_no} has no data. This batch will not be cached."
+                        )
+                    else:
+                        batch.cache(cache_key)
                 self._send_batch(batch)
 
             if batch.last_batch or batch.route_step_last_batch:
@@ -355,6 +370,8 @@ class _StepWrapper:
         Args:
             batch: The batch to impute.
         """
+        if len(batch.data) == 0:
+            return []
         return self.step.impute_step_outputs(batch.data[0])
 
     def _send_batch(self, batch: _Batch) -> None:

@@ -1,0 +1,14 @@
+Audit the persona for page-specific leakage and overfitting.
+
+Instructions:
+- Identify any phrases or fields that implicitly copy page identifiers, exact product/version names, or unique numbers.
+- Recommend abstraction moves to generalize wording while keeping intent intact.
+- Score generality (0–100); higher means more generalizable.
+
+Output ONLY this JSON object:
+{{
+  "page_specificity_risks": list[str],
+  "abstraction_moves": list[str],
+  "generality_score": 0,
+  "rewrite_guidance": str
+}} 

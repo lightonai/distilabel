@@ -28,6 +28,7 @@ from .image import (
 # Misc utilities
 from .misc import (
     add_split_to_dataset_dict,
+    add_split_label_ds,
     add_cols_to_split,
     overwrite_dataset_dict_split,
     normalize_distribution,
@@ -53,6 +54,7 @@ from .misc import (
     save_jsonl,
     load_jsonl,
     hash_structure_with_images,
+    hf_batched,
     cols_true,
     logical_not_filter,
     logical_and_filters,
@@ -62,6 +64,9 @@ from .misc import (
     not_empty_string,
     remove_pdfs_from_dataset,
     remove_pdfs_with_pages_,
+    get_idx_to_filename,
+    format_distiset,
+    try_model_validate,
 )
 
 from .cpe import continuous_parallel_execution
@@ -99,6 +104,7 @@ __all__ = [
     "add_cols_to_split",
     "generation_is_structured",
     "add_split_label",
+    "add_split_label_ds",
     "is_openai_model_name",
     "suppress_output",
     "clean_structured_output",
@@ -108,6 +114,7 @@ __all__ = [
     "save_jsonl",
     "load_jsonl",
     "hash_structure_with_images",
+    "hf_batched",
     "cols_true",
     "logical_not_filter",
     "logical_and_filters",
@@ -118,6 +125,9 @@ __all__ = [
     "not_empty_string",
     "remove_pdfs_from_dataset",
     "remove_pdfs_with_pages_",
+    "get_idx_to_filename",
+    "format_distiset",
+    "try_model_validate",
     # Timer
     "get_timer",
 ]

@@ -26,9 +26,10 @@ class LoadPydanticAsColumns(Step):
     def process(self, *inputs: StepInput) -> 'StepOutput':
         none_dict = dict.fromkeys(self.pydantic_model.model_fields.keys(), None)
         load_pydantic = partial(self.pydantic_model.model_validate_json, strict=True)
+        out = []
         for step_input in inputs:
-            converted_input = [
+            out.extend([
                 load_pydantic(input).model_dump() if input is not None else none_dict
                 for input in step_input
-            ]
-            yield converted_input
+            ])
+        yield out

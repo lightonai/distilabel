@@ -619,6 +619,7 @@ class LoadDataFromDataset(GeneratorStep):
     dataset: Union[IterableDataset, Dataset, None] = Field(default=None, exclude=True)
 
     def process(self, offset: int = 0) -> "GeneratorStepOutput":
+        self._logger.info(f"Loading data from dataset with {len(self.dataset) - offset} rows...")
         while True:
             batch = list(self.dataset.select(range(offset, min(offset + self.batch_size, len(self.dataset)))))
             yield batch, offset + self.batch_size >= len(self.dataset)

@@ -61,8 +61,10 @@ They can be added once we have them defined for every LLM.
 
 class GenerateOutput(TypedDict):
     generations: LLMOutput
+    reasoning_generations: NotRequired[List[str]]
     statistics: LLMStatistics
     logprobs: NotRequired[LLMLogprobs]
+    cache_hit: list[bool] = []
 
 
 class OutlinesStructuredOutputType(TypedDict, total=False):

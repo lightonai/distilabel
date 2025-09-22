@@ -624,6 +624,9 @@ class Step(_Step, ABC):
     Attributes:
         input_batch_size: The number of rows that will contain the batches processed by
             the step. Defaults to `50`.
+        _all_available_cols: bool, whether to set the `_cols` attribute to all available cols by the DAG.
+            Defaults to `False`. This should only be defined by the classes of Steps that use it. These
+            steps should not override the `inputs` and `outputs` properties.
 
     Runtime parameters:
         - `input_batch_size`: The number of rows that will contain the batches processed
@@ -635,6 +638,16 @@ class Step(_Step, ABC):
         description="The number of rows that will contain the batches processed by the"
         " step.",
     )
+    _all_available_cols: bool = PrivateAttr(default=False)
+    _cols: List[str] = PrivateAttr(default_factory=list)
+
+    @property
+    def inputs(self) -> "StepColumns":
+        return self._cols
+
+    @property
+    def outputs(self) -> "StepColumns":
+        return self._cols
 
     @abstractmethod
     def process(self, *inputs: StepInput) -> "StepOutput":
@@ -661,7 +674,7 @@ class Step(_Step, ABC):
         inputs, overriden_inputs = (
             self._apply_input_mappings(args)
             if self.input_mappings
-            else (args, [{} for _ in range(len(args[0]))])
+            else (args, [{} for _ in range(sum(len(arg) for arg in args))])
         )
 
         # If the `Step` was built using the `@step` decorator, then we need to pass
@@ -703,7 +716,7 @@ class Step(_Step, ABC):
         reverted_input_mappings = {v: k for k, v in self.input_mappings.items()}
 
         renamed_inputs = []
-        overriden_inputs = []
+        overriden_inputs = {}
         for i, row_inputs in enumerate(inputs):
             renamed_row_inputs = []
             for row in row_inputs:
@@ -718,11 +731,10 @@ class Step(_Step, ABC):
                         if k != renamed_key and renamed_key in row and len(inputs) == 1:
                             overriden_keys[renamed_key] = row[renamed_key]
 
-                if i == 0:
-                    overriden_inputs.append(overriden_keys)
+                overriden_inputs[str(overriden_keys)] = overriden_keys
                 renamed_row_inputs.append(renamed_row)
             renamed_inputs.append(renamed_row_inputs)
-        return tuple(renamed_inputs), overriden_inputs
+        return tuple(renamed_inputs), list(overriden_inputs.values())
 
     def _apply_mappings_and_restore_overriden(
         self, row: Dict[str, Any], overriden: Dict[str, Any]

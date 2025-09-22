@@ -16,13 +16,16 @@ Important guidelines:
 - Questions should NOT be answerable by looking at any single page in isolation
 - Questions should require connecting or synthesizing information across multiple pages
 - Questions should be clear, specific, and focused
-- Questions should not point to a page by position or number (do not specify which page you are talking about)
+- DO NOT SPECIFY WHICH PAGE YOU ARE TALKING ABOUT (e.g. 'Page 2' is unacceptable)
 - Questions should encourage detailed responses that demonstrate understanding of multiple pages
+
+Again, do not say which pages you are asking about.
+
+You are asked to generate {n_questions} questions.
+{additional_visual_question}
 
 Here is the output format, provide nothing except this:
 {{
   "analysis": str ("Your detailed chain of thought showing how you analyzed the pages and created questions"),
   "questions": list[str] (["Question 1", ...])
 }}
-
-You are asked to generate {n_questions} questions. 

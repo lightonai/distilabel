@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from pathlib import Path
-from typing import Final
+from typing import Final, Dict
 
 # Steps related constants
 DISTILABEL_METADATA_KEY: Final[str] = "distilabel_metadata"
@@ -54,6 +54,42 @@ LAST_BATCH_ROUTED_FLAG: Final[str] = "last_batch_routed"
 STRUCTURED_OUTPUT_RETRIES = 2
 INPUT_QUEUE_LOAD_LEVEL: Final[int] = 128
 WRITE_BUFFER_SIZE: Final[int] = 16384  # 16k rows
+
+MODEL_COST_INPUT: Final[Dict[str, float]] = {
+    'gpt-5': 1.25,
+    'gpt-5-mini': 0.25,
+    'gpt-5-nano': 0.05,
+    'gpt-4.1': 2.0,
+    'gpt-4.1-mini': 0.4,
+    'gpt-4o': 2.5,
+    'gpt-4o-mini': 0.15,
+    'gemini-2.5-pro': 1.25,
+    'gemini-2.5-flash': 0.3,
+    'gemini-2.5-flash-lite': 0.1,
+    'claude-opus-4-1': 15,
+    'claude-opus-4-0': 15,
+    'claude-sonnet-4-0': 3,
+    'claude-3-7-sonnet-latest': 3,
+    'claude-3-5-haiku-latest': 0.25,
+}
+
+MODEL_COST_OUTPUT: Final[Dict[str, float]] = {
+    'gpt-5': 10.0,
+    'gpt-5-mini': 2.0,
+    'gpt-5-nano': 0.4,
+    'gpt-4.1': 8.0,
+    'gpt-4.1-mini': 1.6,
+    'gpt-4o': 10.0,
+    'gpt-4o-mini': 0.6,
+    'gemini-2.5-pro': 10.0,
+    'gemini-2.5-flash': 2.5,
+    'gemini-2.5-flash-lite': 0.4,
+    'claude-opus-4-1': 75.0,
+    'claude-opus-4-0': 75.0,
+    'claude-sonnet-4-0': 15.0,
+    'claude-3-7-sonnet-latest': 15.0,
+    'claude-3-5-haiku-latest': 1.25,
+}
 
 
 __all__ = [

@@ -1,0 +1,13 @@
+Calibrate the persona with realistic constraints and preferences that shape how they ask questions.
+
+Guidance:
+- Constraints: time, access, policy, tooling limits.
+- Preferences: explanation style, ordering, format.
+- Forbidden page ties: terms that overly bind to the page.
+
+Output ONLY this JSON object:
+{{
+  "constraints": list[str],
+  "preferences": list[str],
+  "forbidden_page_ties": list[str]
+}} 

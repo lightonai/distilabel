@@ -14,10 +14,14 @@ class Split(Step):
     Like `ListToRows`, but also adds a uuid to each row so that they can be joined back together later.
 
     input_col is expected to have list of None values. 
-    keep_as_list will keep the value as a list of len 1 after splitting.
+    keep_as_list will keep the value as a list of len 1 after splitting. Ignored when chunking.
+
+    If chunk_size is provided, split the list in `input_col` into sublists of size `chunk_size` instead of
+    individual elements. keep_as_list is ignored when chunking.
     '''
     input_col: str
     keep_as_list: bool = True
+    chunk_size: int | None = None
 
     @property
     def inputs(self) -> 'StepColumns':
@@ -29,23 +33,38 @@ class Split(Step):
 
     def process(self, *inputs: StepInput) -> 'StepOutput':
         # track a uuid for each row so that they can be joined back together later
+        out = []
         for step_input in inputs:
             step_input = [
                 row 
                 | {f'{self.input_col}_uuid': str(uuid.uuid4())}
                 | {
                     f'{self.input_col}_len_before_split': 
-                    len(row[self.input_col]) if row[self.input_col] else 0
+                    (len(row[self.input_col]) if row[self.input_col] else 0)
                 }
                 for row in step_input
             ]
+
+            def _fields(value):
+                # Default behavior: one field per element
+                if self.chunk_size is None or not value:
+                    return (value if value else [None])
+                # Chunking behavior: sublists of size chunk_size
+                return [value[i:i + self.chunk_size] for i in range(0, len(value), self.chunk_size)]
+
             expanded_fields = [
                 row 
-                | {self.input_col: [field] if self.keep_as_list and field is not None else field}
+                | {
+                    self.input_col: (
+                        [field] if self.keep_as_list and field is not None and self.chunk_size is None
+                        else field
+                    )
+                }
                 for row in step_input
-                    for field in (row[self.input_col] if row[self.input_col] else [None])
+                    for field in _fields(row[self.input_col])
             ]
-            yield expanded_fields
+            out.extend(expanded_fields)
+        yield out
 
 class Rejoin(GlobalStep):
     '''
@@ -88,7 +107,7 @@ class Rejoin(GlobalStep):
 
     def process(self, *inputs: StepInput) -> 'StepOutput':
         from collections import defaultdict
-
+        out = []
         for step_input in inputs:
             uuid_col = f"{self.input_col}_uuid"
 
@@ -108,14 +127,15 @@ class Rejoin(GlobalStep):
                     # values of None will be concatenated into a list
                     if all(isinstance(v, (list, type(None))) for v in vals):  # concatenate lists case
                         merged[key] = list(chain(*(v if v is not None else [None] for v in vals)))
-                    elif key in self.duplicates_cols:  # all the same value case
+                    elif key in self.duplicates_cols or key == f'{self.input_col}_len_before_split':  # all the same value case
                         merged[key] = vals[0]
                     else:
                         merged[key] = vals
                 rejoined_rows.append(merged)
             if self.drop_incomplete_rows:
-                rejoined_rows = self.drop_incomplete(rejoined_rows)
+                rejoined_rows = rejoined_rows = self.drop_incomplete(rejoined_rows)
             # Remove the len_before_split column as it's no longer needed
             for row in rejoined_rows:
                 row.pop(f'{self.input_col}_len_before_split', None)
-            yield rejoined_rows
+            out.extend(rejoined_rows)
+        yield out

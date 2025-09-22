@@ -14,14 +14,20 @@ import re
 import random
 from queue import Queue
 from typing import Callable, List, Any
-from datasets import Dataset
+from pydantic import BaseModel, ValidationError
+from datasets import Dataset, load_from_disk
 from pathlib import Path
 from copy import deepcopy
 import pypdfium2 as pdfium
 import multiprocessing as mp
 from tqdm import tqdm
+from collections import defaultdict
 
+from .cpe import continuous_parallel_execution
 from .image import get_image, downsample_image, b64_encode_image
+
+# Cache filename for idx→filename maps
+IDX_TO_FILENAME_CACHE = 'idx_to_filename.json'
 
 @contextmanager
 def suppress_output(debug: bool):
@@ -99,9 +105,29 @@ def generate_idx_to_filename(ds):
     }
     return idx_to_filename
 
-def generate_field_to_idx(ds, field):
+def get_idx_to_filename(ds_path: str | Path) -> dict[int, str]:
+    """Return idx→filename mapping for an images Dataset, with on-disk caching.
+
+    A json named IDX_TO_FILENAME_CACHE will be created in the dataset's directory.
+    """
+    if isinstance(ds_path, str):
+        ds_path = Path(ds_path)
+    cache_path = ds_path / IDX_TO_FILENAME_CACHE
+    if cache_path.exists():
+        mapping = load_json(cache_path)
+        return {
+            int(k): v
+            for k, v in mapping.items()
+        }
+    from datasets import load_from_disk
+    ds = load_from_disk(str(ds_path))
+    mapping = generate_idx_to_filename(ds)
+    save_json(cache_path, mapping)
+    return mapping
+
+def generate_field_to_idx(ds, field, substitution: tuple[str, str] | None = None):
     field_to_idx = {
-        field: idx
+        field.replace(substitution[0], substitution[1]) if substitution else field: idx
         for idx, field in enumerate(ds[field])
     }
     return field_to_idx
@@ -154,8 +180,17 @@ def add_cols_to_split(distiset: Dataset, split: Dataset, cols: list[str]):
     return Dataset.from_list(updated_rows)
 
 def add_split_label(dataset: list[dict], split: str) -> list[dict]:
-    '''Add a split label to a dataset given as a list of dicts'''
+    '''Add a split label to a dataset given as a list of dicts. 
+    For a Dataset, use add_split_label_ds instead.'''
     return [{**row, 'split': split} for row in dataset]
+
+def add_split_label_ds(dataset: Dataset, split: str) -> Dataset:
+    '''Add a split label column to a HuggingFace Dataset. 
+    Overwrites existing split column if it exists.'''
+    if 'split' in dataset.column_names:
+        # Overwrite existing column
+        dataset = dataset.remove_columns(['split'])
+    return dataset.add_column('split', [split] * len(dataset))
 
 def sort_adjacent_pages(dataset: list[dict]) -> list[dict]:
     '''Sort the 'source' col containing adjacent pages in a dataset given as a list of dicts'''
@@ -177,9 +212,35 @@ def replace_source_col(distiset: Dataset, dataset: list[dict]):
     to retain the original order
     '''
     map_to_source = {frozenset(row['source']): row['source'] for row in dataset}
-    distiset = distiset.map(lambda x: {'source': map_to_source.get(frozenset(x['source']))}, num_proc=16)
-    distiset = distiset.filter(lambda x: x['source'] is not None)
+    distiset = distiset.map(
+        hf_batched(lambda x: {'source': map_to_source.get(frozenset(x['source']))}),
+        batched=True,
+        num_proc=16,
+    )
+    distiset = distiset.filter(
+        hf_batched(lambda x: x['source'] is not None),
+        batched=True,
+        num_proc=16,
+    )
     return distiset
+
+def hf_batched(f: Callable) -> Callable:
+    '''
+    Wrap a function that works on a single row into a function that works on a batch of rows,
+    given as a dict of lists for batching hf dataset processing.
+    '''
+    def batched_f(batch: dict[str, list[Any]]) -> dict[str, list[Any]]:
+        keys = list(batch.keys())
+        rows = [dict(zip(keys, values)) for values in zip(*batch.values())]
+        out_rows = [f(r) for r in rows]
+        if isinstance(out_rows[0], bool):
+            return out_rows
+        out = defaultdict(list)
+        for row in out_rows:
+            for k, v in row.items():
+                out[k].append(v)
+        return dict(out)
+    return batched_f
 
 def hash_structure_with_images(obj: Any) -> str:
     """Deterministic hash of a recursive structure.
@@ -325,6 +386,8 @@ def is_openai_model_name(model_name: str) -> bool:
     """
     Check if a string is the name of an OpenAI model by matching 'gpt' or 'o' followed by a digit and anything else.
     """
+    if 'oss' in model_name:
+        return False
     return bool(re.search(r'(gpt|o\d.*)', model_name, re.IGNORECASE))
 
 def source_to_msg(
@@ -359,13 +422,93 @@ def source_to_msg(
     else:
         return {'role': 'user', 'content': None}
 
-def clean_structured_output(output: str | None) -> str | None:
+def clean_structured_output(
+    output: str | None, 
+    double_escape: bool = False,
+    fix_quotes: bool = False,
+) -> str | None:
     '''Remove some common and basic formatting errors.'''
     if output is None:
         return None
-    output = output.replace('```json', '').replace('```', '')
+    output = (
+        output
+        .replace('False', 'false')
+        .replace('True', 'true')
+    )
+    if output.startswith('```json'):
+        output = output[len('```json'):]
+    if output.endswith('```'):
+        output = output[:-len('```')]
+    # Double-escape single backslashes only inside JSON string values and normalize raw newlines
+    def _double_escape_in_strings(s: str) -> str:
+        s = s.replace('\\\\', '\\')
+        string_pattern = r'"(?:[^"\\]|\\.)*"'
+        def _repl(m: re.Match) -> str:
+            quoted = m.group(0)
+            inner = quoted[1:-1]
+            # Normalize line endings and convert raw newlines to literal \n
+            inner = inner.replace('\r\n', '\n').replace('\r', '\n')
+            inner = inner.replace('\n', r'\n')
+            inner = inner.replace('"', '\\"')
+            # Only double lone backslashes that are NOT starting valid JSON escapes
+            # Valid JSON escapes: \" \\ \/ \b \f \n \r \t \uXXXX
+            inner = re.sub(r'(?<!\\)\\(?![\\/"bfnrtu])', r'\\\\', inner)
+            return '"' + inner + '"'
+        return re.sub(string_pattern, _repl, s, flags=re.DOTALL)
+    if double_escape:
+        output = _double_escape_in_strings(output)
+
+    def _fix_quotes(s: str) -> str:
+        '''
+        Double quotes inside string values are not valid json. 
+        This function attempts to fix them, but does not handle nested string values.
+        '''
+        field_seperator = '",\n'
+        key_value_seperator = ': '
+        s = s.split(field_seperator)
+        corrected = []
+        for field in s:
+            v_start = field.find(key_value_seperator) + len(key_value_seperator)
+
+            k, v = field[:v_start], field[v_start:]
+            if v.startswith('"'): 
+                v = v[1:]
+            else:
+                # bail on non-string values
+                corrected.append(field)
+                continue
+            v = v.replace('"', r'\"')
+            corrected.append(f'{k}"{v}')
+        return field_seperator.join(corrected)
+    if fix_quotes:
+        output = _fix_quotes(output)
+
     output = output[output.find('{'):]
     return output
+
+def try_model_validate(model: BaseModel, output: str | None, **kwargs) -> BaseModel | None:
+    if output is None:
+        return None
+
+    candidates = (
+        output,
+        clean_structured_output(output, double_escape=False),
+        clean_structured_output(output, double_escape=True),
+        clean_structured_output(output, fix_quotes=True),
+        clean_structured_output(output, double_escape=True, fix_quotes=True),
+    ) # progressively stonger replacements
+
+    last_exc: ValidationError | None = None
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        try:
+            return model.model_validate_json(candidate, **kwargs)
+        except ValidationError as e:
+            last_exc = e
+
+    if last_exc is not None:
+        raise last_exc
 
 def _get_pdf_paths_from_disk(pdf_root: Path | str, limit: int | None = None):
     """
@@ -443,12 +586,21 @@ def count_all_pages(
     save_json(path_to_page_count_path, path_to_page_count)
     return path_to_page_count
 
-def remove_pdfs_from_dataset(dataset: Dataset, exclude_pdfs: set[str], row_to_ifn: Callable | None = None):
+def remove_pdfs_from_dataset(
+    dataset: Dataset, 
+    exclude_pdfs: set[str], 
+    row_to_ifn: Callable | None = None,
+    num_proc: int = 16,
+):
     '''
     Remove all image filenames that are from pdfs in the exclude_pdfs set
     row_to_ifn is a function that takes a row and returns the pdf name, defaults to pdf_name
     '''
-    return dataset.filter(lambda x: pdf_name(row_to_ifn(x) if row_to_ifn else x['image_filename']) not in exclude_pdfs)
+    return dataset.filter(
+        hf_batched(lambda x: pdf_name(row_to_ifn(x) if row_to_ifn else x['image_filename']) not in exclude_pdfs),
+        batched=True,
+        num_proc=num_proc,
+    )
 
 def remove_pdfs_with_pages_(
     dataset: Dataset, 
@@ -468,6 +620,87 @@ def remove_pdfs_with_pages_(
         n_jobs=16,
     )
     return dataset.filter(
-        lambda x: less_than <= fn_to_page_count[pdf_name(row_to_ifn(x))] <= more_than,
+        hf_batched(lambda x: less_than <= fn_to_page_count[pdf_name(row_to_ifn(x))] <= more_than),
+        batched=True,
         num_proc=16,
     )
+
+fn_to_idx: dict[str, int] | None = None
+
+def default_conversion_fn(row: dict, path_substitution: tuple[str, str] | None = None, **kwargs) -> dict:
+    '''
+    Default conversion function for the distiset.
+    '''
+    global fn_to_idx
+    image_indices = [
+        fn_to_idx[
+            ifn.replace(path_substitution[0], path_substitution[1])
+            if path_substitution else ifn
+        ] for ifn in row['source']
+    ]
+
+    user_content = (
+        ''.join([f'<IMG_{i}>' for i in range(len(image_indices))])
+        + row['question']
+    )
+    assistant_content = row['answer']
+    messages = [
+        {'role': 'user', 'content': user_content},
+        {'role': 'assistant', 'content': assistant_content}
+    ]
+    return {
+        'images': image_indices,
+        'messages': messages,
+        'n_images': len(image_indices),
+    }
+
+def format_distiset(
+    distiset: Dataset,
+    conversion_fn: Callable = default_conversion_fn,
+    path_substitution: tuple[str, str] | None = None,
+    images_ds_path: str | Path | None = None,
+    cols_to_keep: list[str] = [],
+    n_workers: int = 16,
+) -> Dataset:
+    '''
+    Format the distiset to vision format/build actual examples from extractions
+
+    Args:
+        distiset: The distiset to format
+        conversion_fn: The function to convert the row to vision format.
+            Default simply uses the source col as images, the question as 
+            user content, and the answer as assistant content. If using 
+            the default, you must provide the images_ds_path.
+        path_substitution: The substitution to make to the image filenames in the images_ds_path.
+            Only needed if using the default conversion function.
+        cols_to_keep: The columns to keep from the distiset aside from 
+            `['images', 'messages', 'n_images']`
+        n_workers: The number of workers to use for the parallel execution
+        images_ds_path: The path to the images dataset. Only needed if using
+            the default conversion function.
+    '''
+    distiset = distiset.to_list()
+
+    if conversion_fn is default_conversion_fn:
+        global fn_to_idx
+        if fn_to_idx is None:
+            images_ds = load_from_disk(images_ds_path)
+            fn_to_idx = generate_field_to_idx(images_ds, 'image_filename', path_substitution)
+
+    tqdm_desc = "Formatting to vision"
+    conversion_fn = partial(conversion_fn, path_substitution=path_substitution)
+    cpe = continuous_parallel_execution(
+        function=conversion_fn,
+        tasks=[{'row': row, 'idx': idx} for idx, row in enumerate(distiset)],
+        task_count=len(distiset),
+        process_type="process",
+        num_workers=n_workers,
+        max_active_tasks=1024,
+        tqdm_desc=tqdm_desc,
+    )
+    vision_ds = [None] * len(distiset)
+    for task, result in cpe:
+        vision_ds[task['idx']] = task['row'] | result
+
+    distiset = Dataset.from_list(vision_ds).select_columns(list(set(['images', 'messages', 'n_images'] + cols_to_keep)))
+    return distiset

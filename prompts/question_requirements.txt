@@ -4,5 +4,5 @@ You have asked a question already, now you should break the question down to det
 
 Here is the output format, provide nothing except this:
 {{
-  "question_requirements": str (in a single string, break the question down into a numbered list of specific information the question requests or needs to be properly answered (no more than 4)),
+  "question_requirements": str (in a single string, break the question down into a numbered list of specific information the question requests or needs to be properly answered (no more than 4))
 }}

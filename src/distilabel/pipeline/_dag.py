@@ -423,6 +423,7 @@ class DAG(_Serializable):
                 self._validate_step_process_runtime_parameters(step)
 
                 # Validate step mappings
+                self._fill_all_available_cols(step)
                 step.verify_inputs_mappings()
                 step.verify_outputs_mappings()
 
@@ -437,6 +438,7 @@ class DAG(_Serializable):
                     self._validate_generator_step_process_signature(step)
                 else:
                     self._step_inputs_are_available(step)
+                    self._validate_global_step(step)
 
                     # Validate routing batch function (if any)
                     predecessors = list(self.get_step_predecessors(step.name))  # type: ignore
@@ -450,6 +452,23 @@ class DAG(_Serializable):
                     )
                     if receives_routed_batches:
                         steps_receiving_routed_batches.append(step.name)
+
+    def _fill_all_available_cols(self, step: "_Step") -> None:
+        """If the step has the `_all_available_cols` attribute set to `True`, 
+        fills the `_cols` attribute of the step with all the available inputs for the step.
+
+        Args:
+            step: The step to fill the `_cols` attribute of.
+        """
+        if not hasattr(step, '_all_available_cols'):
+            return
+        inputs_available_for_step = [
+            output
+            for step_name in nx.ancestors(self.G, step.name)
+            for output in self.get_step(step_name)[STEP_ATTR_NAME].get_outputs()  # type: ignore
+        ]
+        if step._all_available_cols:
+            step._cols = list(set(inputs_available_for_step))
 
     def _step_inputs_are_available(self, step: "_Step") -> None:
         """Validates that the `Step.inputs` will be available when the step gets to be
@@ -491,6 +510,19 @@ class DAG(_Serializable):
         step_input_parameter = step.get_process_step_input()
         self._validate_process_step_input_parameter(step.name, step_input_parameter)  # type: ignore
 
+    def _validate_global_step(self, step: "_Step") -> None:
+        """Validates global steps.
+
+        Args:
+            step: The step to validate.
+        """
+        if step.is_global:
+            if step.resources.replicas > 1:
+                raise ValueError(
+                    f"Global steps can only have a single replica, but "
+                    f"'{step.name}' has {step.resources.replicas}."
+                )
+
     def _validate_convergence_step(
         self,
         step: "Step",
@@ -516,6 +548,12 @@ class DAG(_Serializable):
 
         # Mark the step as a convergence step
         self.set_step_attr(step.name, CONVERGENCE_STEP_ATTR_NAME, True)  # type: ignore
+
+        if step.resources.replicas > 1:
+            raise ValueError(
+                f"Convergence steps can only have a single replica, but "
+                f"'{step.name}' has {step.resources.replicas}."
+            )
 
         # Check if all the predecessors of the step are receiving routed batches from the
         # same step

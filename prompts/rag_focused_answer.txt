@@ -8,6 +8,6 @@ Important guidelines:
 - Answers should not point to a page by position or number (do not specify which page you are talking about)
 - Structure your answer logically and clearly
 - If the answer requires drawing connections between information on different pages, make those connections explicit
-- If the question cannot be fully answered with the given information, clearly state what information is missing
+- If the question cannot be fully answered with the given information, clearly state this and what information is missing
 
 Consider all the provided pages as your knowledge source and aim to create the most complete and accurate answer possible. 

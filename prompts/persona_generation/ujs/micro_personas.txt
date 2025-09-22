@@ -1,0 +1,15 @@
+You will see one page from a larger document. Create three micro-personas that represent a realistic user journey around a single task suggested by this page:
+- BEFORE: framing the task/problem
+- DURING: executing or deciding
+- AFTER: verifying outcomes or communicating
+
+Constraints:
+- Be concise and concrete; avoid page identifiers, product/version numbers, or quotes.
+- Use simple fields with short phrases; keep knowledge level literal.
+
+Output ONLY this JSON object:
+{{
+  "before": {{ "role": str, "goal": str, "concerns": list[str], "knowledge": "novice|competent|expert" }},
+  "during": {{ "role": str, "goal": str, "concerns": list[str], "knowledge": "novice|competent|expert" }},
+  "after":  {{ "role": str, "goal": str, "concerns": list[str], "knowledge": "novice|competent|expert" }}
+}} 

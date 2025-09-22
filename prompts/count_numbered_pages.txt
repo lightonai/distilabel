@@ -1,0 +1,9 @@
+Use the scratchpad to consider whether or not the page number which indicates the position in the single pdf document is visible on the page.
+There may be other numbers on the page. List the candidate numbers in the scratchpad and then for each, determine if they are the actual page number.
+Provide a final answer for whether or not the page number is visible.
+
+Here is the output format, provide nothing except this:
+{{
+  "scratchpad": str,
+  "is_page_number_visible": bool
+}}

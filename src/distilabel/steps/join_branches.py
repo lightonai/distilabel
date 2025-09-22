@@ -32,8 +32,9 @@ class ConcatenateBranches(Step):
     and filling in the missing values with factory given by col_factories, otherwise 
     `None`.
 
+    The cols will be set to all available cols by the DAG to ensure each row has the same schema.
+
     Attributes:
-        cols: A list of columns that you can reference in input or output mappings.
         col_factories: A dictionary mapping column names to a factory for constructing
             a default instance of the correct type. For any row missing some of the cols 
             in `cols`, the factory will be used to fill in the missing values. If no factory
@@ -47,17 +48,8 @@ class ConcatenateBranches(Step):
     Output:
         list[`StepOutput`] (a list of dictionaries)
     """
-
-    cols: List[str] = []
+    _all_available_cols: bool = True
     col_factories: Dict[str, Callable] = {}
-
-    @property
-    def inputs(self) -> "StepColumns":
-        return self.cols
-
-    @property
-    def outputs(self) -> "StepColumns":
-        return self.cols
 
     def process(self, *inputs: StepInput) -> "StepOutput":
         col_factory = lambda col: self.col_factories.get(col, lambda: None)
@@ -65,7 +57,7 @@ class ConcatenateBranches(Step):
         for branch_input in inputs:
             cat_rows.extend(
                 [
-                    {**row, **{col: col_factory(col)() for col in self.cols if col not in row}}
+                    {**row, **{col: col_factory(col)() for col in self._cols if col not in row}}
                     for row in branch_input
                 ]
             )
