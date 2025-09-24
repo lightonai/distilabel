@@ -55,7 +55,7 @@ def lc_mm_overall_answer_lm_config(
         replicas=gpu_mesh[0],
         vllm_kwargs={
             'limit-mm-per-prompt': "'{\"image\": top_k}'".replace('top_k', str(TOP_K_PAGES)),
-            'max-model-len': '96000',
+            'max-model-len': '240000',
             'gpu-memory-utilization': 0.95,
             'quantization': 'fp8',
         },
@@ -101,20 +101,21 @@ stages = [
             lc_mm_overall_answer_lm_config('gpt-5-nano', data_ratio=1.0, gpu_mesh=(1, None)),
             lc_mm_overall_answer_lm_config('gemini-2.5-flash', data_ratio=0.1, gpu_mesh=(1, None)),
             lc_mm_overall_answer_lm_config('gemini-2.5-flash-lite', data_ratio=1.0, gpu_mesh=(1, None)),
+            lc_mm_overall_answer_lm_config('Qwen/Qwen3-VL-235B-A22B-Instruct-FP8', data_ratio=4.0, gpu_mesh=(4, 2)),
 
             # qwen 235 instruct
             # text only models
             LMConfig(
                 path='Qwen/Qwen3-235B-A22B-Instruct-2507-FP8',
-                data_ratio=8.0,
+                data_ratio=4.0,
                 task_name='overall_answer_text_only',
-                temperature=0.6,
+                temperature=0.7,
                 max_new_tokens=16384,
                 tp_size=4,
-                replicas=2,
+                replicas=1,
                 vllm_kwargs={
                     'gpu-memory-utilization': 0.95,
-                    'max-model-len': '220000',
+                    'max-model-len': '240000',
                 },
                 out_model=None,
                 system_template_path='distilabel/prompts/lc_sft/combine_evidence_chunks.txt',

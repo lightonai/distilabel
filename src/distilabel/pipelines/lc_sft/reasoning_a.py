@@ -37,6 +37,7 @@ def convert_to_vision(row: dict, path_substitution: tuple[str, str] | None = Non
             user_content = f'{control_token} {user_content}'
         else:
             user_content = f'{user_content} {control_token}'
+        messages[0]['content'] = user_content
     else:
         messages.insert(0, {'role': 'system', 'content': control_token})
     

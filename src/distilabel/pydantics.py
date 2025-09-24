@@ -149,6 +149,10 @@ class MultiPageQuestions(BaseModel):
     analysis: str
     questions: list[str]
 
+class AnalysisQuestion(BaseModel):
+    analysis: str
+    question: str
+
 class QuestionRequirements(BaseModel):
     '''Ask the LM to break down the question into requirements'''
     question_requirements: str
@@ -194,6 +198,21 @@ class HallucinationQA(BaseModel):
     analysis: str
     question: str
     answer: str
+
+class ScenarioPartialAnswer(BaseModel):
+    partial_answer: str
+    clarification_question: str
+    clarification_answer: str
+
+class ScenarioIncorrectAnswer(BaseModel):
+    incorrect_answer: str
+    correction_question: str
+    correction_answer: str
+
+class ScenarioCorrectAnswer(BaseModel):
+    correct_answer: str
+    skeptical_question: str
+    citation_answer: str
 
 class Persona(CoT):
     persona: str

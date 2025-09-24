@@ -12,6 +12,8 @@ Important Guidelines:
 - Provide evidence in the language of the question (i.e. Enlgish pages with a French question yield French evidence, English pages with an English question yield English evidence)
 - Do not reference a page (i.e. 'the first page' is unacceptable, because the next agent will not know what page is meant)
 
+Provide a fine-grained relevance_score indicating how important this page is to answering the question. Adjust this to precisely reflect its relevance and importance.
+
 Here is the output format, provide nothing except this:
 {{
   "evidence": str ("the relevant information from the page"),

@@ -191,7 +191,7 @@ def structured_and_requires_multiple_pages(row: dict, cols: list[str]) -> bool:
     return not any(row['question_fully_answered']) and structured
 
 
-def build_seeds(ds: Dataset) -> list[dict[str, Any]]:
+def build_seeds(ds: Dataset, target_counts: dict[str, int]) -> list[dict[str, Any]]:
     """Build initial 2–5 page seeds for all 8 target splits."""
     # Precompute mapping and page counts
     global IDX_TO_IFN_IMAGES_DS, FN_TO_PAGE_COUNT
@@ -199,7 +199,7 @@ def build_seeds(ds: Dataset) -> list[dict[str, Any]]:
     FN_TO_PAGE_COUNT = utils.count_all_pages(PDF_ROOT, CACHE_DIR)
 
     # Distribute types per split
-    need = TARGET_COUNTS.copy()
+    need = target_counts.copy()
     seeds: dict[str, list[dict[str, Any]]] = {k: [] for k in need}
 
     # Helpers for type assignment
@@ -641,7 +641,7 @@ def augment_into_splits(distiset: Dataset) -> DatasetDict:
 if __name__ == '__main__':
     total_needed = sum(TARGET_COUNTS.values())
     base_ds = get_ds(total_needed * 2, front=False)
-    seeds = build_seeds(base_ds)
+    seeds = build_seeds(base_ds, TARGET_COUNTS)
     seed_ds = Dataset.from_list(seeds)
 
     questions_ds, cost_tracker = run_pipeline_for_questions(seed_ds, config)

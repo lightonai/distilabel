@@ -167,8 +167,6 @@ def run_pipeline(config: Config, dataset: Dataset):
         )
 
         lc_mm_branch = NoOp(name='lc_mm_branch', input_batch_size=BATCH_SIZE)
-        # I stick with a text only branch because there are really powerful open source models that
-        # are text only (e.g. Qwen3 235B) and no MM ones that can match them
         # the goal is for the extracted evidence to be sufficient for the models in this branch to answer the question
         text_only_branch = NoOp(name='text_only_branch', input_batch_size=BATCH_SIZE)
 
@@ -396,21 +394,4 @@ if __name__ == '__main__':
         n_workers=16,
     )
 
-    # split between short and long
-    short_ds = distiset.filter(
-        utils.hf_batched(
-            lambda row: '_short' in row['split']
-        ),
-        batched=True,
-        num_proc=32,
-    )
-    long_ds = distiset.filter(
-        utils.hf_batched(
-            lambda row: '_short' not in row['split']
-        ),
-        batched=True,
-        num_proc=32,
-    )
-
-    short_ds.save_to_disk(CACHE_DIR / 'synthetic_cot_short_vds')
-    long_ds.save_to_disk(CACHE_DIR / 'synthetic_cot_long_vds')
+    distiset.save_to_disk(CACHE_DIR / 'synthetic_cot_vds')

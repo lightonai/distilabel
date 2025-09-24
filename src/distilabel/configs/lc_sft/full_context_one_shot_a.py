@@ -25,7 +25,7 @@ stages = [
     Stage(
         lm_configs=[ # 72b
             LMConfig(
-                path='Qwen/Qwen2.5-VL-32B-Instruct',
+                path='Qwen/Qwen2.5-VL-72B-Instruct',
                 data_ratio=1.0,
                 task_name='transcribe',
                 temperature=0.2,

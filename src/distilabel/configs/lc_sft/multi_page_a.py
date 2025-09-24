@@ -20,7 +20,7 @@ PATH_SUBSTITUTION = ('/lustre/fsn1/projects/rech/eya/uzj46do/pdfs/', '/mnt/nfs/p
 
 stages = [
     Stage(
-        lm_configs=[ # 72b, gemini flash, gpt 5 mini
+        lm_configs=[ # 72b, gemini flash, gpt 5 mini, Qwen/Qwen3-VL-235B-A22B-Instruct-FP8
             LMConfig(
                 path='Qwen/Qwen2.5-VL-32B-Instruct', 
                 data_ratio=1.0, 
