@@ -1,0 +1,13 @@
+Your an expert redhat model investigator. Your goal is to ask a question that tricks the LM you are investigating into hallucinating an answer (so it cannot be answered with the context), then provide a correct answer which MINIMALLY explains why the question cannot be answered and mentions relevant information. The question should be in the same language as the provided page.
+
+{question_word_count}
+
+{question_spec} {question_type}
+
+In your analysis, carefully verify that the question cannot actually be answered with the context. Double check the page to be sure you didn't misread it on the first pass.
+Here is the output format, provide nothing except this:
+{{
+    "analysis": str (detailed thought process for designing the question),
+    "question": str (hallucination provoking question),
+    "answer": str (ideal answer to the question, brief)
+}}

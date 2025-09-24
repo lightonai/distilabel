@@ -84,3 +84,4 @@ bench_pdfs.txt
 *logs/
 build_images_ds.*
 multi_node_vllm.*
+out/

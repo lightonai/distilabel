@@ -609,6 +609,7 @@ def remove_pdfs_with_pages_(
     row_to_ifn: Callable = lambda row: row['image_filename'],
     less_than: int = 0,
     more_than: int = 10_000,
+    num_proc: int = 16,
 ):
     '''
     Remove all pdfs that have less than less_than pages or more than more_than pages from the dataset.
@@ -617,12 +618,12 @@ def remove_pdfs_with_pages_(
     fn_to_page_count = count_all_pages(
         pdf_root=pdf_root,
         cache_dir=cache_dir,
-        n_jobs=16,
+        n_jobs=num_proc,
     )
     return dataset.filter(
         hf_batched(lambda x: less_than <= fn_to_page_count[pdf_name(row_to_ifn(x))] <= more_than),
         batched=True,
-        num_proc=16,
+        num_proc=num_proc,
     )
 
 fn_to_idx: dict[str, int] | None = None

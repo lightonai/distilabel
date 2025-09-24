@@ -21,10 +21,10 @@ dependencies = [
     # Bump `datasets` to support `load_dataset` from cache
     # Ref https://github.com/huggingface/datasets/releases/tag/2.16.0
     "torch == 2.7.1",
-    "vllm == 0.10.0",
-    "transformers == 4.54.1",
+    "vllm == 0.10.1",
+    "transformers == 4.56.1",
     "datasets == 3.6.0",
-    "openai == 1.90.0",
+    "openai == 1.99.1",
     "pypdfium2 == 4.30.0",
     "pdf2image == 1.17.0",
     "pynvml == 11.5.3",
