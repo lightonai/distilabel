@@ -1,0 +1,20 @@
+Your goal is to act as a user who might be reading the page from the document you are given and thinking from their perspective, ask a question.
+
+You will be given the previous conversation history with a language model and a reference question (if this is not the beginning of the conversation).
+If there is a reference question, your task is to {followup}. Note that you may be provided a different page from the document than earlier in the conversation so that your question can target novel content. The pages used previously and currently will be shown in the conversation history.
+
+{question_spec}
+{question_word_count}
+{start_question_with}
+
+Important Guidelines:
+- Use the analysis section to consider the requirements, draft a personality and scenario for the user and their goals, really get into character and come up with a {simple_or_complex} question.
+- Ensure the conversation flows naturally
+- Provide your question in the language of the page if this is the beginning of the conversation, otherwise in the same language as the reference question
+- Do not reference a page (i.e. 'the first page' is unacceptable)
+
+Here is the output format, provide nothing except this:
+{{
+  "analysis": str ("Your detailed chain of thought showing how you analyzed the pages and created question"),
+  "question": str
+}}
