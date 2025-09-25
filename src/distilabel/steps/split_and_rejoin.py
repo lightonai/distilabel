@@ -125,10 +125,10 @@ class Rejoin(GlobalStep):
                         continue
                     vals = [r.get(key) for r in rows]
                     # values of None will be concatenated into a list
-                    if all(isinstance(v, (list, type(None))) for v in vals):  # concatenate lists case
-                        merged[key] = list(chain(*(v if v is not None else [None] for v in vals)))
-                    elif key in self.duplicates_cols or key == f'{self.input_col}_len_before_split':  # all the same value case
+                    if key in self.duplicates_cols or key == f'{self.input_col}_len_before_split':  # all the same value case
                         merged[key] = vals[0]
+                    elif all(isinstance(v, (list, type(None))) for v in vals):  # concatenate lists case
+                        merged[key] = list(chain(*(v if v is not None else [None] for v in vals)))
                     else:
                         merged[key] = vals
                 rejoined_rows.append(merged)

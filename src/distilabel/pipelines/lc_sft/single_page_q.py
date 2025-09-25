@@ -125,15 +125,14 @@ def run_pipeline(config: Config):
     )
     return distiset, cost_tracker
 
-def _doc_eligible_batched(batch: dict[str, list[Any]]) -> list[bool]:
+def _doc_eligible_batched(batch: dict[str, list[Any]], fn_to_page_count: dict[str, int]) -> list[bool]:
     # really only the n_pages >= 5 is new, already filtered for <= 336 when getting the dataset
     # in run_pipeline
-    global FN_TO_PAGE_COUNT
     keep: list[bool] = []
     for src in batch['source']:
         anchor = src[0]
         pdf_path = utils.pdf_name(anchor)
-        n = FN_TO_PAGE_COUNT[pdf_path]
+        n = fn_to_page_count[pdf_path]
         keep.append(5 <= n <= 336)
     return keep
 
@@ -141,7 +140,8 @@ def _add_pages_hn(
     row: dict[str, Any],
     max_total: int,
     top_k: int,
-    after_k: int = 0
+    after_k: int = 0,
+    idx_to_ifn_images_ds: dict[int, str] = {},
 ) -> dict[str, Any]:
     '''
     Add a random amount of hard negatives to the source from the top_k hard negatives for each type
@@ -149,7 +149,6 @@ def _add_pages_hn(
 
     The source order is shuffled before returning.
     '''
-    global IDX_TO_IFN_IMAGES_DS
     source = row['source']
     remaining = max(0, max_total - len(source))
     hni = (row.get('hard_negs_idx_img_img', []) or [])[after_k:after_k + top_k]
@@ -159,23 +158,23 @@ def _add_pages_hn(
     # add a random amount up to the max_total
     n = random.randint(0, remaining)
     add = random.sample(candidates, k=min(n, len(candidates))) if n > 0 else []
-    negs = [IDX_TO_IFN_IMAGES_DS[i] for i in add]
+    negs = [idx_to_ifn_images_ds[i] for i in add]
     new_source = source + list(dict.fromkeys(negs))
     return {'source': random.sample(new_source, k=len(new_source))}
 
 def _add_pages_doc(
     row: dict[str, Any],
     reasoning: bool = False,
+    fn_to_page_count: dict[str, int] = {},
 ) -> dict[str, Any]:
     '''Add pages from the doc to the source.
     If reasoning, take a contiguous chunk of length up to 104 inclusive.
     Otherwise, take the whole doc.
     '''
-    global FN_TO_PAGE_COUNT
     # all of these are from the same doc, so we can just use the first page to get the doc info
     anchor = row['source'][0]
     pdf_path = utils.pdf_name(anchor)
-    n = FN_TO_PAGE_COUNT[pdf_path]
+    n = fn_to_page_count[pdf_path]
     if reasoning and n > 104:
         # pick contiguous chunk of length up to 104 inclusive
         length = 104  # hopefully shorter than gpt-oss max length (128K) when converted to text
@@ -187,7 +186,7 @@ def _add_pages_doc(
     full = [utils.path_as_page(anchor, p) for p in pages]
     return {'source': full}
 
-def _add_adjacent_pages(row: dict, max_adjacent: int = 4) -> dict:
+def _add_adjacent_pages(row: dict, max_adjacent: int = 4, fn_to_page_count: dict[str, int] = {}) -> dict:
     '''Select n_pages random pages adjacent to the anchor (row['image_filename']).
     Return a list of page filenames sorted by page number.
 
@@ -196,7 +195,7 @@ def _add_adjacent_pages(row: dict, max_adjacent: int = 4) -> dict:
     anchor_ifn = row['source'][0]
     pdf_path = utils.pdf_name(anchor_ifn)
     anchor_page = utils.pdf_page(anchor_ifn)
-    total = FN_TO_PAGE_COUNT[pdf_path]
+    total = fn_to_page_count[pdf_path]
     n_select = min(random.randint(2, max_adjacent + 1), total)
 
     # Build a contiguous window of size n_select that includes the anchor,
@@ -216,6 +215,78 @@ def _add_adjacent_pages(row: dict, max_adjacent: int = 4) -> dict:
 
     pages = [_resolve_path(utils.path_as_page(anchor_ifn, i)) for i in range(left, right)]
     return {'source': pages}
+
+def augment_into_splits(
+    dataset: Dataset,
+    split_sizes: list[int],
+    split_names: list[str],
+    fn_to_page_count: dict[str, int],
+    idx_to_ifn_images_ds: dict[int, str],
+    num_proc: int = 32,
+) -> DatasetDict:
+    '''
+    Create long source cols based on various split types.
+    '''
+    ds = DatasetDict()
+    for split_name, start, end in zip(split_names, accumulate([0] + split_sizes[:-1]), accumulate(split_sizes)):
+        ds[split_name] = dataset.select(range(start, end))
+        if split_name == 'distractors_short':
+            ds[split_name].save_to_disk(CACHE_DIR / 'distractors_short_q')
+            ds[split_name] = (
+                ds[split_name]
+                .map(utils.hf_batched(partial(
+                    _add_pages_hn, 
+                    max_total=5, 
+                    after_k=32, 
+                    top_k=256, 
+                    idx_to_ifn_images_ds=idx_to_ifn_images_ds,
+                )), batched=True, num_proc=num_proc)
+            )
+        elif split_name == 'adj_short':
+            ds[split_name] = (
+                ds[split_name]
+                .map(utils.hf_batched(partial(
+                    _add_adjacent_pages, 
+                    max_adjacent=4, 
+                    fn_to_page_count=fn_to_page_count,
+                )), batched=True, num_proc=num_proc)
+            )
+        elif split_name == 'hn_short':
+            ds[split_name] = (
+                ds[split_name]
+                .map(utils.hf_batched(partial(
+                    _add_pages_hn, 
+                    max_total=5, 
+                    top_k=32, 
+                    idx_to_ifn_images_ds=idx_to_ifn_images_ds,
+                )), batched=True, num_proc=num_proc)
+            )
+        elif 'short' not in split_name:
+            if split_name.endswith('hn'):
+                ds[split_name] = (
+                    ds[split_name]
+                    .map(utils.hf_batched(partial(
+                        _add_pages_hn, 
+                        max_total=64, 
+                        top_k=32, 
+                        idx_to_ifn_images_ds=idx_to_ifn_images_ds,
+                    )), batched=True, num_proc=num_proc)
+                )
+            elif split_name.endswith('doc'):
+                reasoning = 'reasoning' in split_name
+                ds[split_name] = (
+                    ds[split_name]
+                    .filter(partial(
+                        _doc_eligible_batched, 
+                        fn_to_page_count=fn_to_page_count,
+                    ), batched=True, num_proc=num_proc)
+                    .map(utils.hf_batched(partial(
+                        _add_pages_doc, 
+                        reasoning=reasoning, 
+                        fn_to_page_count=fn_to_page_count,
+                    )), batched=True, num_proc=num_proc)
+                )
+    return ds
 
 if __name__ == "__main__":
     global FN_TO_PAGE_COUNT, IDX_TO_IFN_IMAGES_DS
@@ -245,37 +316,6 @@ if __name__ == "__main__":
         'reasoning_hn',
         'reasoning_doc',
     ]
-    ds = DatasetDict()
-    for split_name, start, end in zip(split_names, accumulate([0] + split_sizes[:-1]), accumulate(split_sizes)):
-        ds[split_name] = distiset.select(range(start, end))
-        if split_name == 'distractors_short':
-            ds[split_name].save_to_disk(CACHE_DIR / 'distractors_short_q')
-            ds[split_name] = (
-                ds[split_name]
-                .map(utils.hf_batched(partial(_add_pages_hn, max_total=5, after_k=32, top_k=256)), batched=True, num_proc=32)
-            )
-        elif split_name == 'adj_short':
-            ds[split_name] = (
-                ds[split_name]
-                .map(utils.hf_batched(partial(_add_adjacent_pages, max_adjacent=4)), batched=True, num_proc=32)
-            )
-        elif split_name == 'hn_short':
-            ds[split_name] = (
-                ds[split_name]
-                .map(utils.hf_batched(partial(_add_pages_hn, max_total=5, top_k=32)), batched=True, num_proc=32)
-            )
-        elif 'short' not in split_name:
-            if split_name.endswith('hn'):
-                ds[split_name] = (
-                    ds[split_name]
-                    .map(utils.hf_batched(partial(_add_pages_hn, max_total=64, top_k=32)), batched=True, num_proc=32)
-                )
-            elif split_name.endswith('doc'):
-                reasoning = 'reasoning' in split_name
-                ds[split_name] = (
-                    ds[split_name]
-                    .filter(partial(_doc_eligible_batched), batched=True, num_proc=32)
-                    .map(utils.hf_batched(partial(_add_pages_doc, reasoning=reasoning)), batched=True, num_proc=32)
-                )
+    ds = augment_into_splits(distiset, split_sizes, split_names, FN_TO_PAGE_COUNT, IDX_TO_IFN_IMAGES_DS)
     ds.save_to_disk(CACHE_DIR / 'single_page_q_ds')
 

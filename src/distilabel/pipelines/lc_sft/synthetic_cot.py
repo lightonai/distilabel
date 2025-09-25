@@ -127,7 +127,16 @@ def run_pipeline(config: Config, dataset: Dataset):
         rejoin_chunks = Rejoin(
             name='rejoin_chunks',
             input_col='source',
-            duplicates_cols=['question', 'question_model_name', 'split', 'evidence_system'],
+            duplicates_cols=[
+                'question', 
+                'question_model_name', 
+                'split', 
+                'evidence_system',
+                'question_system',
+                'hard_negs_idx_img_img',
+                'hard_negs_idx_txt_img',
+                'partial_source',
+            ],
             input_batch_size=BATCH_SIZE,
         )
 
@@ -385,6 +394,15 @@ if __name__ == '__main__':
     # format to vision generic
     images_ds = load_from_disk(IMAGES_DS_PATH)
     fn_to_idx = utils.generate_field_to_idx(images_ds, 'image_filename', config.path_substitution)
+
+    # no_cot_vds = utils.format_distiset(
+    #     distiset, 
+    #     images_ds_path=IMAGES_DS_PATH,
+    #     path_substitution=config.path_substitution,
+    #     cols_to_keep=['answer_model_name', 'split'], 
+    #     n_workers=16,
+    # )
+    # no_cot_vds.save_to_disk(CACHE_DIR / 'synthetic_cot_for_multi_turn_vds')
 
     distiset = utils.format_distiset(
         distiset, 
