@@ -101,7 +101,7 @@ stages = [
             lc_mm_overall_answer_lm_config('gpt-5-nano', data_ratio=1.0, gpu_mesh=(1, None)),
             lc_mm_overall_answer_lm_config('gemini-2.5-flash', data_ratio=0.1, gpu_mesh=(1, None)),
             lc_mm_overall_answer_lm_config('gemini-2.5-flash-lite', data_ratio=1.0, gpu_mesh=(1, None)),
-            lc_mm_overall_answer_lm_config('Qwen/Qwen3-VL-235B-A22B-Instruct-FP8', data_ratio=4.0, gpu_mesh=(4, 2)),
+            lc_mm_overall_answer_lm_config('Qwen/Qwen3-VL-235B-A22B-Instruct-FP8', data_ratio=4.0, gpu_mesh=(1, 4)),
 
             # qwen 235 instruct
             # text only models
@@ -128,3 +128,5 @@ stages = [
 ]
 
 config = Config(stages=stages, use_running_vllm=False, path_substitution=PATH_SUBSTITUTION)
+
+# Expecting $3 / 18K question = 437K images = 390M tok (though plus the cot, maybe more like 450M tok)

@@ -115,10 +115,10 @@ def get_lm_config(
 stages = [
     Stage(
         lm_configs=[ # 72b, 32b, gpt-5-nano, gemini-2.5-flash-lite
-            get_lm_config('Qwen/Qwen2.5-VL-72B-Instruct', data_ratio=1.0, gpu_mesh=(1, 2)),
+            get_lm_config('Qwen/Qwen2.5-VL-72B-Instruct', data_ratio=1.5, gpu_mesh=(1, 2)),
             get_lm_config('Qwen/Qwen2.5-VL-32B-Instruct', data_ratio=1.0, gpu_mesh=(2, 1)),
-            get_lm_config('gpt-5-nano', data_ratio=1.0, gpu_mesh=(1, None)),
-            get_lm_config('gemini-2.5-flash-lite', data_ratio=1.0, gpu_mesh=(1, None)),
+            get_lm_config('gpt-5-nano', data_ratio=0.5, gpu_mesh=(1, None)),
+            get_lm_config('gemini-2.5-flash-lite', data_ratio=3.0, gpu_mesh=(1, None)),
         ],
         available_gpus=AVAILABLE_GPUS,
         max_dims=(1000, 1000),
@@ -129,3 +129,4 @@ config = Config(stages=stages, use_running_vllm=False, path_substitution=PATH_SU
 
 # ds of 500, 0.25 for gpt-5-nano, 0.25 for gemini flash lite, openai reports $0.09. Gemini likely the same.
 
+# Expecting $1.44 / 7K question = 145K images = 130M tok

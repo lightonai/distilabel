@@ -35,13 +35,13 @@ stages = [
     Stage(
         lm_configs=[ # 72b
             LMConfig(
-                path='Qwen/Qwen2.5-VL-32B-Instruct',
+                path='Qwen/Qwen2.5-VL-72B-Instruct',
                 data_ratio=1.0,
                 task_name='transcribe',
                 temperature=0.2,
                 max_new_tokens=4096,
-                tp_size=1,
-                replicas=1,
+                tp_size=2,
+                replicas=2,
                 vllm_kwargs={
                     'limit-mm-per-prompt': "'{\"image\": 1}'",
                     'max-model-len': '32768',
@@ -67,7 +67,7 @@ stages = [
                 task_name='answer',
                 temperature=1.0,
                 max_new_tokens=65536,
-                tp_size=2,
+                tp_size=None,
                 replicas=1,
                 vllm_kwargs={
                     'gpu-memory-utilization': 0.92,

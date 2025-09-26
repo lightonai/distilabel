@@ -79,9 +79,10 @@ stages = [
     Stage(
         lm_configs=[ # 72b, 32b, gpt-5-nano, gemini-2.5-flash-lite
             # get_lm_config('Qwen/Qwen2.5-VL-72B-Instruct', data_ratio=1.0, gpu_mesh=(1, 2)),
-            get_lm_config('Qwen/Qwen2.5-VL-32B-Instruct', data_ratio=1.0, gpu_mesh=(2, 1)),
-            # get_lm_config('gpt-5-nano', data_ratio=1.0, gpu_mesh=(1, None)),
-            # get_lm_config('gemini-2.5-flash-lite', data_ratio=1.0, gpu_mesh=(1, None)),
+            # get_lm_config('Qwen/Qwen2.5-VL-32B-Instruct', data_ratio=1.0, gpu_mesh=(2, 1)),
+            get_lm_config('gpt-5-nano', data_ratio=1.0, gpu_mesh=(1, None)),
+            get_lm_config('gemini-2.5-flash-lite', data_ratio=1.0, gpu_mesh=(1, None)),
+            get_lm_config('Qwen/Qwen3-VL-235B-A22B-Instruct-FP8', data_ratio=2.0, gpu_mesh=(2, 4)),
         ],
         available_gpus=AVAILABLE_GPUS,
         max_dims=(1000, 1000),

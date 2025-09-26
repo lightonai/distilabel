@@ -154,7 +154,7 @@ stages = [
                 replicas=2,
                 vllm_kwargs={
                     'max-model-len': '32768',
-                    'gpu-memory-utilization': 0.9,
+                    'gpu-memory-utilization': 0.95,
                     'quantization': 'fp8',
                 },
                 out_model='QuestionRequirements',
@@ -188,9 +188,10 @@ stages = [
     Stage(
         lm_configs=[
             # gpt-5-mini, gemini-2.5-flash, 72b
-            judge_answers_lm_config('Qwen/Qwen2.5-VL-72B-Instruct', data_ratio=4.0, gpu_mesh=(2, 2)),
-            judge_answers_lm_config('gpt-5-nano', data_ratio=1.0, gpu_mesh=(1, None)),
+            judge_answers_lm_config('Qwen/Qwen2.5-VL-72B-Instruct', data_ratio=1.0, gpu_mesh=(2, 2)),
+            # judge_answers_lm_config('gpt-5-nano', data_ratio=1.0, gpu_mesh=(1, None)),
             judge_answers_lm_config('gemini-2.5-flash-lite', data_ratio=1.0, gpu_mesh=(1, None)),
+            judge_answers_lm_config('Qwen/Qwen3-30B-A3B-Instruct-2507-FP8', data_ratio=2.0, gpu_mesh=(1, None)),
         ],
         available_gpus=AVAILABLE_GPUS,
         max_dims=(1000, 1000),
@@ -199,4 +200,4 @@ stages = [
 
 config = Config(stages=stages, use_running_vllm=False, path_substitution=PATH_SUBSTITUTION)
 
-# $3.09
+# Expecting $3 / 11K question = 296K images = 260M tok

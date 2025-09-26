@@ -20,6 +20,33 @@ CACHE_DIR = Path('/mnt/nfs/austin_shared/mp_data_gen/distilabel/out/lc_sft')
 AVAILABLE_GPUS = [4, 5, 6, 7]
 PATH_SUBSTITUTION = ('/lustre/fsn1/projects/rech/eya/uzj46do/pdfs/', '/mnt/nfs/pdfs/')
 
+def answer_lm_config(
+    path: str, 
+    data_ratio: float = 1.0, 
+    gpu_mesh: tuple[int | None, int | None] = (1, 1)
+):
+    temperature = 0.7
+    if 'gpt-5' in path:
+        temperature = 1.0
+    return LMConfig(
+        path=path,
+        data_ratio=data_ratio,
+        task_name='answer',
+        temperature=temperature,
+        max_new_tokens=16384,
+        tp_size=gpu_mesh[1],
+        replicas=gpu_mesh[0],
+        vllm_kwargs={
+            'limit-mm-per-prompt': "'{\"image\": 0}'",
+            'gpu-memory-utilization': 0.95,
+            'quantization': 'fp8',
+            'max-model-len': '220000',
+        },
+        out_model=None,
+        system_template_path='distilabel/prompts/lc_sft/full_context_answer.txt',
+        prompt_sampler_config=PromptSamplerConfig(),
+    )
+
 stages = [
     # Stage 0: transcribe
     Stage(
@@ -51,23 +78,8 @@ stages = [
     # Qwen/Qwen3-235B-A22B-Instruct-2507-FP8, gemini flash, gpt 5 mini (temperature=1)
     Stage(
         lm_configs=[
-            LMConfig(
-                # path='Qwen/Qwen2.5-VL-32B-Instruct',
-                path='Qwen/Qwen3-235B-A22B-Instruct-2507-FP8',
-                data_ratio=1.0,
-                task_name='answer',
-                temperature=0.3,
-                max_new_tokens=16384,
-                tp_size=4,
-                replicas=1,
-                vllm_kwargs={
-                    'gpu-memory-utilization': 0.95,
-                    'max-model-len': '220000',
-                },
-                out_model=None,
-                system_template_path='distilabel/prompts/lc_sft/full_context_answer.txt',
-                prompt_sampler_config=PromptSamplerConfig(),
-            ),
+            answer_lm_config('Qwen/Qwen3-235B-A22B-Instruct-2507-FP8', data_ratio=5.0, gpu_mesh=(1, 4)),
+            answer_lm_config('gemini-2.5-flash', data_ratio=1.0, gpu_mesh=(1, None)),
         ],
         available_gpus=AVAILABLE_GPUS,
         max_dims=(1000, 1000),

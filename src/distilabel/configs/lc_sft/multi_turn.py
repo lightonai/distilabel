@@ -149,20 +149,75 @@ def lc_mm_overall_answer_lm_config(
         prompt_sampler_config=lc_mm_prompt_sampler_config,
     )
 
+def evidence_in_chunks_lm_config(
+    path: str,
+    data_ratio: float = 1.0,
+    gpu_mesh: tuple[int | None, int | None] = (1, 1)
+):
+    temperature = 0.7
+    if 'gpt-5' in path:
+        temperature = 1.0
+    return LMConfig(
+        path=path,
+        data_ratio=data_ratio,
+        task_name='evidence_in_chunks',
+        temperature=temperature,
+        max_new_tokens=4096,
+        tp_size=gpu_mesh[1],
+        replicas=gpu_mesh[0],
+        vllm_kwargs={
+            'limit-mm-per-prompt': "'{\"image\": 1}'",
+            'max-model-len': '32768',
+            'gpu-memory-utilization': 0.95,
+            'quantization': 'fp8',
+        },
+        out_model='EvidenceInChunks',
+        system_template_path='distilabel/prompts/lc_sft/evidence_in_chunks.txt',
+        prompt_sampler_config=PromptSamplerConfig(),
+    )
+
 stages = [
     # Stage 0: followup questions
     Stage(
         lm_configs=[ # 72b
             # question generation has two parts, sp and mp style questions
             question_lm_config(
-                path='Qwen/Qwen2.5-VL-32B-Instruct', 
-                data_ratio=1.0, 
+                path='Qwen/Qwen2.5-VL-72B-Instruct', 
+                data_ratio=2.0, 
                 gpu_mesh=(1, None), 
                 system_template_path='distilabel/prompts/lc_sft/sp_followup_question.txt', 
                 prompt_sampler_config=sp_followup_question_prompt_sampler_config
             ),
             question_lm_config(
-                path='Qwen/Qwen2.5-VL-32B-Instruct', 
+                path='gemini-2.5-flash-lite', 
+                data_ratio=3.0, 
+                gpu_mesh=(1, None), 
+                system_template_path='distilabel/prompts/lc_sft/sp_followup_question.txt', 
+                prompt_sampler_config=sp_followup_question_prompt_sampler_config
+            ),
+            question_lm_config(
+                path='gpt-5-nano', 
+                data_ratio=0.5, 
+                gpu_mesh=(1, None), 
+                system_template_path='distilabel/prompts/lc_sft/sp_followup_question.txt', 
+                prompt_sampler_config=sp_followup_question_prompt_sampler_config
+            ),
+            question_lm_config(
+                path='Qwen/Qwen2.5-VL-72B-Instruct', 
+                data_ratio=1.0, 
+                gpu_mesh=(1, None), 
+                system_template_path='distilabel/prompts/lc_sft/mp_followup_question.txt', 
+                prompt_sampler_config=mp_followup_question_prompt_sampler_config
+            ),
+            question_lm_config(
+                path='gemini-2.5-flash-lite', 
+                data_ratio=1.0, 
+                gpu_mesh=(1, None), 
+                system_template_path='distilabel/prompts/lc_sft/mp_followup_question.txt', 
+                prompt_sampler_config=mp_followup_question_prompt_sampler_config
+            ),
+            question_lm_config(
+                path='gpt-5-nano', 
                 data_ratio=1.0, 
                 gpu_mesh=(1, None), 
                 system_template_path='distilabel/prompts/lc_sft/mp_followup_question.txt', 
@@ -176,24 +231,8 @@ stages = [
     # Stage 1: collect evidence in chunks
     Stage(
         lm_configs=[ # 72b
-            LMConfig(
-                path='Qwen/Qwen2.5-VL-32B-Instruct',
-                data_ratio=1.0,
-                task_name='evidence_in_chunks',
-                temperature=0.7,
-                max_new_tokens=4096,
-                tp_size=None,
-                replicas=1,
-                vllm_kwargs={
-                    'limit-mm-per-prompt': "'{\"image\": 1}'",
-                    'max-model-len': '32768',
-                    'gpu-memory-utilization': 0.95,
-                    'quantization': 'fp8',
-                },
-                out_model='EvidenceInChunks',
-                system_template_path='distilabel/prompts/lc_sft/evidence_in_chunks.txt',
-                prompt_sampler_config=PromptSamplerConfig(),
-            ),
+            evidence_in_chunks_lm_config(path='Qwen/Qwen2.5-VL-72B-Instruct', data_ratio=1.0, gpu_mesh=(2, 2)),
+            evidence_in_chunks_lm_config(path='Qwen/Qwen3-VL-235B-A22B-Instruct-FP8', data_ratio=1.0, gpu_mesh=(1, 4)),
         ],
         available_gpus=AVAILABLE_GPUS,
         max_dims=(1000, 1000),
@@ -204,11 +243,11 @@ stages = [
         lm_configs=[
             # gemini flash, gpt 5 mini
             # LC MM models
-            # lc_mm_overall_answer_lm_config('gpt-5-mini', data_ratio=0.1, gpu_mesh=(1, None)),
-            # lc_mm_overall_answer_lm_config('gpt-5-nano', data_ratio=1.0, gpu_mesh=(1, None)),
-            # lc_mm_overall_answer_lm_config('gemini-2.5-flash', data_ratio=0.1, gpu_mesh=(1, None)),
-            # lc_mm_overall_answer_lm_config('gemini-2.5-flash-lite', data_ratio=1.0, gpu_mesh=(1, None)),
-            lc_mm_overall_answer_lm_config('Qwen/Qwen2.5-VL-32B-Instruct', data_ratio=1.0, gpu_mesh=(1, None)),
+            lc_mm_overall_answer_lm_config('gpt-5-mini', data_ratio=0.1, gpu_mesh=(1, None)),
+            lc_mm_overall_answer_lm_config('gpt-5-nano', data_ratio=1.0, gpu_mesh=(1, None)),
+            lc_mm_overall_answer_lm_config('gemini-2.5-flash', data_ratio=0.1, gpu_mesh=(1, None)),
+            lc_mm_overall_answer_lm_config('gemini-2.5-flash-lite', data_ratio=1.0, gpu_mesh=(1, None)),
+            lc_mm_overall_answer_lm_config('Qwen/Qwen3-VL-235B-A22B-Instruct-FP8', data_ratio=4.0, gpu_mesh=(1, 4)),
         ],
         available_gpus=AVAILABLE_GPUS,
         max_dims=(1000, 1000),
