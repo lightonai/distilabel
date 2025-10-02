@@ -25,6 +25,7 @@ from distilabel.configs.lc_sft.full_context_one_shot_a import (
     MP_DS_PATH,
     CACHE_DIR,
     IMAGES_DS_PATH,
+    PIPELINE_NAME,
 )
 
 STAGE = 0
@@ -220,7 +221,7 @@ if __name__ == '__main__':
         datasets.append(utils.add_split_label_ds(mp_ds_dict[split], f'mp_{split}'))
     dataset = concatenate_datasets(datasets)
 
-    distiset, cost_tracker = run_pipeline(config, dataset, 'full_context_one_shot_a')
+    distiset, cost_tracker = run_pipeline(config, dataset, PIPELINE_NAME)
     print(f"Cost: {dict(cost_tracker)}")
     distiset = distiset['default']['train']
 

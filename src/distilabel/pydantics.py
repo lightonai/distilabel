@@ -194,7 +194,7 @@ class EvidenceInChunks(BaseModel):
     relevant: bool
     relevance_score: float
 
-class HallucinationQA(BaseModel):
+class UnanswerableQA(BaseModel):
     analysis: str
     question: str
     answer: str

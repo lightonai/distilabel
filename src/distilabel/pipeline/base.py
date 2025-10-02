@@ -904,8 +904,8 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
             "log_file": pipeline_execution_dir / "pipeline.log",
             "stages_file": pipeline_execution_dir / "stages.json",
             "distiset": folder / "distiset",
-            "batches_cache": self._cache_dir / "batches_cache",  # shared even across different pipeline executions
-            "lm_cache": self._cache_dir / "lm_cache",
+            "batches_cache": self._cache_dir / self.name / "batches_cache",
+            "lm_cache": self._cache_dir / "lm_cache",  # shared across different pipelines since it is precise
             "cost_tracker": folder / "cost_tracker.json",
         }
 

@@ -53,6 +53,7 @@ from distilabel.configs.lc_sft.multi_turn import (
     IMAGES_DS_PATH,
     TOP_K_PAGES,
     MAX_TURNS,
+    PIPELINE_NAME,
 )
 import json
 
@@ -255,7 +256,7 @@ def run_pipeline(config: Config):
     loop_distisets = []
     for loop_idx in range(MAX_TURNS):
         with Pipeline(
-            name=f"multi_turn_{loop_idx}",
+            name=f"{PIPELINE_NAME}_{loop_idx}",
             description="Simulate various scenarios in a loop for multi-turn QA.",
             cache_dir=CACHE_DIR / 'multi_turn' / f'loop_{loop_idx}',
         ) as pipeline:
@@ -280,7 +281,7 @@ def run_pipeline(config: Config):
                 loop_distisets.append(distiset)
                 break
             load_data = LoadDataFromDataset(name="load_data", dataset=distiset, batch_size=BATCH_SIZE)  # cols: ['source', ...]
-            lms = pipe_utils.make_lms(config, stage, use_cache=False)
+            lms = pipe_utils.make_lms(config, stage, use_cache=True)
 
             followup_sample_conversation = Map(
                 name='followup_sample_conversation',
@@ -312,7 +313,7 @@ def run_pipeline(config: Config):
             # ---------------------- Stage 1: Evidence extraction ----------------------
             STAGE = 1
             stage = config.stages[STAGE]
-            lms = pipe_utils.make_lms(config, stage, use_cache=False)
+            lms = pipe_utils.make_lms(config, stage, use_cache=True)
 
             # Chunk source into 1-page chunks per row
             split_chunks = Split(
@@ -740,5 +741,5 @@ if __name__ == "__main__":
         cat_conversations['different_source'],
     ])
 
-    distiset.save_to_disk(CACHE_DIR / 'multi_turn_ds')
+    distiset.save_to_disk(CACHE_DIR / 'multi_turn_vds')
 

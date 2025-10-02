@@ -19,10 +19,12 @@ MP_DS_PATH = Path('/mnt/nfs/austin_shared/mp_data_gen/distilabel/out/lc_sft/true
 IMAGES_DS_PATH = Path('/mnt/nfs/austin_shared/data/all_pdfs_images_ds')
 PDF_ROOT = Path('/mnt/nfs/pdfs')
 CACHE_DIR = Path('/mnt/nfs/austin_shared/mp_data_gen/distilabel/out/lc_sft')
-AVAILABLE_GPUS = [0, 1, 2, 3, 4, 5, 6, 7]
+AVAILABLE_GPUS = [0, 1, 2, 3]
 PATH_SUBSTITUTION = ('/lustre/fsn1/projects/rech/eya/uzj46do/pdfs/', '/mnt/nfs/pdfs/')
 
-TOP_K_PAGES = 4
+TOP_K_PAGES = 8
+
+PIPELINE_NAME = 'synthetic_cot_v0'
 
 lc_mm_prompt_sampler_config = PromptSamplerConfig(
     distributions={
@@ -75,7 +77,7 @@ stages = [
                 temperature=0.7,
                 max_new_tokens=4096,
                 tp_size=2,
-                replicas=4,
+                replicas=2,
                 vllm_kwargs={
                     'limit-mm-per-prompt': "'{\"image\": 1}'",
                     'max-model-len': '32768',
@@ -97,17 +99,17 @@ stages = [
         lm_configs=[
             # gemini flash, gpt 5 mini
             # LC MM models
-            lc_mm_overall_answer_lm_config('gpt-5-mini', data_ratio=0.1, gpu_mesh=(1, None)),
-            lc_mm_overall_answer_lm_config('gpt-5-nano', data_ratio=1.0, gpu_mesh=(1, None)),
-            lc_mm_overall_answer_lm_config('gemini-2.5-flash', data_ratio=0.1, gpu_mesh=(1, None)),
-            lc_mm_overall_answer_lm_config('gemini-2.5-flash-lite', data_ratio=1.0, gpu_mesh=(1, None)),
-            lc_mm_overall_answer_lm_config('Qwen/Qwen3-VL-235B-A22B-Instruct-FP8', data_ratio=4.0, gpu_mesh=(1, 4)),
+            # lc_mm_overall_answer_lm_config('gpt-5-mini', data_ratio=0.1, gpu_mesh=(1, None)),
+            # lc_mm_overall_answer_lm_config('gpt-5-nano', data_ratio=1.0, gpu_mesh=(1, None)),
+            lc_mm_overall_answer_lm_config('gemini-2.5-flash', data_ratio=0.5, gpu_mesh=(1, None)),
+            lc_mm_overall_answer_lm_config('gemini-2.5-flash-lite', data_ratio=0.5, gpu_mesh=(1, None)),
+            lc_mm_overall_answer_lm_config('Qwen/Qwen3-VL-235B-A22B-Instruct', data_ratio=1.0, gpu_mesh=(1, 4)),
 
             # qwen 235 instruct
             # text only models
             LMConfig(
                 path='Qwen/Qwen3-235B-A22B-Instruct-2507-FP8',
-                data_ratio=4.0,
+                data_ratio=1.0,
                 task_name='overall_answer_text_only',
                 temperature=0.7,
                 max_new_tokens=16384,

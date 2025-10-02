@@ -30,6 +30,7 @@ from distilabel.configs.lc_sft.synthetic_cot import (
     CACHE_DIR,
     TOP_K_PAGES,
     IMAGES_DS_PATH,
+    PIPELINE_NAME,
 )
 
 STAGE = 0
@@ -73,7 +74,7 @@ def run_pipeline(config: Config, dataset: Dataset):
     global STAGE, BATCH_SIZE
 
     with Pipeline(
-        name='synthetic_cot',
+        name=PIPELINE_NAME,
         description='Extract evidence from each page, then combine and use this to answer the question.',
         cache_dir=CACHE_DIR / 'synthetic_cot',
     ) as pipeline:
@@ -336,14 +337,18 @@ def convert_to_vision(row: dict, path_substitution: tuple[str, str] | None = Non
     ]
 
     control_token = '<cot>'
-    if random.random() < 0.5:
+    r = random.random()
+    if r < 0.5:
         if random.random() < 0.5:
             user_content = f'{control_token} {user_content}'
         else:
             user_content = f'{user_content} {control_token}'
         messages[0]['content'] = user_content
-    else:
+    elif r < 0.95:
         messages.insert(0, {'role': 'system', 'content': control_token})
+    else:
+        # no cot, teaches the model that the control token implies <think></think>
+        messages[-1]['content'] = row['answer']
 
     return {
         'images': image_indices,

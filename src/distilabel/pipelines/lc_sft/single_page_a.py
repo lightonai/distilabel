@@ -22,6 +22,7 @@ from distilabel.configs.lc_sft.single_page_a import (
     DS_PATH,
     CACHE_DIR,
     IMAGES_DS_PATH,
+    PIPELINE_NAME,
 )
 
 STAGE = 0
@@ -68,7 +69,7 @@ def run_pipeline(config: Config):
     dataset = load_from_disk(DS_PATH)
 
     with Pipeline(
-        name='single_page_a',
+        name=PIPELINE_NAME,
         description='Generate single-page answers and add distant negatives to context',
         cache_dir=CACHE_DIR / 'single_page_a',
     ) as pipeline:

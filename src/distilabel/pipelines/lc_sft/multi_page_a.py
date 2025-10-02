@@ -22,6 +22,7 @@ from distilabel.configs.lc_sft.multi_page_a import (
     CACHE_DIR,
     PDF_ROOT,
     IMAGES_DS_PATH,
+    PIPELINE_NAME,
 )
 
 STAGE = 0
@@ -44,7 +45,7 @@ def run_pipeline(config: Config):
     dataset = concatenate_datasets([utils.add_split_label_ds(hn, 'hn_short'), utils.add_split_label_ds(adj, 'adj_short')])
 
     with Pipeline(
-        name='multi_page_a',
+        name=PIPELINE_NAME,
         description='Generate multi-page answers for single-page questions using multi-page context',
         cache_dir=CACHE_DIR / 'multi_page_a',
     ) as pipeline:

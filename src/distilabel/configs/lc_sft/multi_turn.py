@@ -15,11 +15,13 @@ DS_PATH = Path('/mnt/nfs/austin_shared/data/scraped_and_pdfa')
 IMAGES_DS_PATH = Path('/mnt/nfs/austin_shared/data/all_pdfs_images_ds')
 PDF_ROOT = Path('/mnt/nfs/pdfs')
 CACHE_DIR = Path('/mnt/nfs/austin_shared/mp_data_gen/distilabel/out/lc_sft')
-AVAILABLE_GPUS = [0, 1, 2, 3, 4, 5, 6, 7]
+AVAILABLE_GPUS = [0, 1, 2, 3]
 PATH_SUBSTITUTION = ('/lustre/fsn1/projects/rech/eya/uzj46do/pdfs/', '/mnt/nfs/pdfs/')
 
-TOP_K_PAGES = 4
+TOP_K_PAGES = 8
 MAX_TURNS = 6
+
+PIPELINE_NAME = 'multi_turn_v0'
 
 question_words = [
     'What', 
@@ -183,20 +185,20 @@ stages = [
             # question generation has two parts, sp and mp style questions
             question_lm_config(
                 path='Qwen/Qwen2.5-VL-72B-Instruct', 
-                data_ratio=2.0, 
-                gpu_mesh=(1, None), 
+                data_ratio=1.0, 
+                gpu_mesh=(1, 2), 
                 system_template_path='distilabel/prompts/lc_sft/sp_followup_question.txt', 
                 prompt_sampler_config=sp_followup_question_prompt_sampler_config
             ),
             question_lm_config(
                 path='gemini-2.5-flash-lite', 
-                data_ratio=3.0, 
+                data_ratio=0.5, 
                 gpu_mesh=(1, None), 
                 system_template_path='distilabel/prompts/lc_sft/sp_followup_question.txt', 
                 prompt_sampler_config=sp_followup_question_prompt_sampler_config
             ),
             question_lm_config(
-                path='gpt-5-nano', 
+                path='gemini-2.5-flash', 
                 data_ratio=0.5, 
                 gpu_mesh=(1, None), 
                 system_template_path='distilabel/prompts/lc_sft/sp_followup_question.txt', 
@@ -205,20 +207,20 @@ stages = [
             question_lm_config(
                 path='Qwen/Qwen2.5-VL-72B-Instruct', 
                 data_ratio=1.0, 
-                gpu_mesh=(1, None), 
+                gpu_mesh=(1, 2), 
                 system_template_path='distilabel/prompts/lc_sft/mp_followup_question.txt', 
                 prompt_sampler_config=mp_followup_question_prompt_sampler_config
             ),
             question_lm_config(
                 path='gemini-2.5-flash-lite', 
-                data_ratio=1.0, 
+                data_ratio=0.5, 
                 gpu_mesh=(1, None), 
                 system_template_path='distilabel/prompts/lc_sft/mp_followup_question.txt', 
                 prompt_sampler_config=mp_followup_question_prompt_sampler_config
             ),
             question_lm_config(
-                path='gpt-5-nano', 
-                data_ratio=1.0, 
+                path='gemini-2.5-flash', 
+                data_ratio=0.5, 
                 gpu_mesh=(1, None), 
                 system_template_path='distilabel/prompts/lc_sft/mp_followup_question.txt', 
                 prompt_sampler_config=mp_followup_question_prompt_sampler_config
@@ -231,8 +233,8 @@ stages = [
     # Stage 1: collect evidence in chunks
     Stage(
         lm_configs=[ # 72b
-            evidence_in_chunks_lm_config(path='Qwen/Qwen2.5-VL-72B-Instruct', data_ratio=1.0, gpu_mesh=(2, 2)),
-            evidence_in_chunks_lm_config(path='Qwen/Qwen3-VL-235B-A22B-Instruct-FP8', data_ratio=1.0, gpu_mesh=(1, 4)),
+            # evidence_in_chunks_lm_config(path='Qwen/Qwen2.5-VL-72B-Instruct', data_ratio=1.0, gpu_mesh=(2, 2)),
+            evidence_in_chunks_lm_config(path='Qwen/Qwen3-VL-235B-A22B-Instruct', data_ratio=1.0, gpu_mesh=(1, 4)),
         ],
         available_gpus=AVAILABLE_GPUS,
         max_dims=(1000, 1000),
@@ -243,11 +245,9 @@ stages = [
         lm_configs=[
             # gemini flash, gpt 5 mini
             # LC MM models
-            lc_mm_overall_answer_lm_config('gpt-5-mini', data_ratio=0.1, gpu_mesh=(1, None)),
-            lc_mm_overall_answer_lm_config('gpt-5-nano', data_ratio=1.0, gpu_mesh=(1, None)),
-            lc_mm_overall_answer_lm_config('gemini-2.5-flash', data_ratio=0.1, gpu_mesh=(1, None)),
+            lc_mm_overall_answer_lm_config('gemini-2.5-flash', data_ratio=1.0, gpu_mesh=(1, None)),
             lc_mm_overall_answer_lm_config('gemini-2.5-flash-lite', data_ratio=1.0, gpu_mesh=(1, None)),
-            lc_mm_overall_answer_lm_config('Qwen/Qwen3-VL-235B-A22B-Instruct-FP8', data_ratio=4.0, gpu_mesh=(1, 4)),
+            lc_mm_overall_answer_lm_config('Qwen/Qwen3-VL-235B-A22B-Instruct', data_ratio=2.0, gpu_mesh=(1, 4)),
         ],
         available_gpus=AVAILABLE_GPUS,
         max_dims=(1000, 1000),

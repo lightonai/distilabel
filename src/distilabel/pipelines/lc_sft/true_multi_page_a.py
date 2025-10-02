@@ -22,6 +22,7 @@ from distilabel.configs.lc_sft.true_multi_page_a import (
     CACHE_DIR,
     PDF_ROOT,
     IMAGES_DS_PATH,
+    PIPELINE_NAME,
 )
 
 STAGE = 0
@@ -43,7 +44,7 @@ def run_pipeline(config: Config):
     )
 
     with Pipeline(
-        name='true_multi_page_a',
+        name=PIPELINE_NAME,
         description='Generate multi-page answers with full visual context for the true multi-page questions with 2-5 pages.',
         cache_dir=CACHE_DIR / 'true_multi_page_a',
     ) as pipeline:

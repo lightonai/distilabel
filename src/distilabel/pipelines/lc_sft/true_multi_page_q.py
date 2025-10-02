@@ -33,6 +33,7 @@ from distilabel.configs.lc_sft.true_multi_page_q import (
     IMAGES_DS_PATH,
     PDF_ROOT,
     CACHE_DIR,
+    PIPELINE_NAME,
 )
 
 # ----------------------------------------------------------------------------
@@ -57,14 +58,14 @@ random.seed(SEED)
 # } # this divided by 10_000 gave 800 questions
 
 TARGET_COUNTS = {
-    'true_multi_page_short_hn': 5_00 * 2,
-    'true_multi_page_short_doc': 9_00 * 2,
-    'recursive_hn': 1_20 * 2,
-    'recursive_doc': 2_40 * 2,
-    'full_context_one_shot_hn': 1_20 * 2,
-    'full_context_one_shot_doc': 2_40 * 2,
-    'reasoning_hn': 1_20 * 2,
-    'reasoning_doc': 2_40 * 2,
+    'true_multi_page_short_hn': 1_000,
+    'true_multi_page_short_doc': 1_800,
+    'recursive_hn': 500,
+    'recursive_doc': 1_000,
+    'full_context_one_shot_hn': 500,
+    'full_context_one_shot_doc': 1_000,
+    'reasoning_hn': 500,
+    'reasoning_doc': 1_000,
 }
 
 IDX_TO_IFN_IMAGES_DS = None  # filled in main
@@ -286,7 +287,7 @@ def run_pipeline_for_questions(seed_ds: Dataset, config: Config):
     STAGE = 0
 
     with Pipeline(
-        name='true_multi_page_q',
+        name=PIPELINE_NAME,
         description='Generate multi-page questions with filtering (stages 0–2 of true_multi_page).',
         cache_dir=CACHE_DIR / 'true_multi_page_q',
     ) as pipeline:

@@ -90,7 +90,6 @@ class _Batch(_Serializable, SignatureMixin):
         """
         self.data = data
         self.size = len(data[0])
-        self._update_data_hash()
 
     @_timer.time_it
     def get_data(self, num_rows: Union[int, None] = None) -> List[Dict[str, Any]]:
@@ -114,7 +113,7 @@ class _Batch(_Serializable, SignatureMixin):
         if self.num_rows() == 0:
             return []
 
-        if self.data_path and self._fs:
+        if self.data_path and self._fs and self._num_rows_fs is not None:
             self.read_batch_data_from_fs()
 
         if num_rows is None:
@@ -125,11 +124,6 @@ class _Batch(_Serializable, SignatureMixin):
             self.data[0] = self.data[0][num_rows:]
 
         # self.size = len(self.data[0])
-        self._update_data_hash()
-
-        if self.data_path and self._fs and self.num_rows() != 0:
-            self.write_batch_data_to_fs()
-        
         return data
 
     def num_rows(self) -> int:
@@ -137,11 +131,6 @@ class _Batch(_Serializable, SignatureMixin):
         if self._num_rows_fs is not None:
             return self._num_rows_fs
         return sum(len(d) for d in self.data)
-
-    @_timer.time_it
-    def _update_data_hash(self) -> None:
-        """Updates the hash of the data of the batch."""
-        self.data_hash = hashlib.sha1(str(self.data).encode()).hexdigest()
 
     @classmethod
     def accumulate(cls, step_name: str, batches: List[List["_Batch"]]) -> "_Batch":

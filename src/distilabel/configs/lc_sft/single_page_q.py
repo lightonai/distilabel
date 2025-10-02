@@ -85,6 +85,8 @@ CACHE_DIR = Path('/mnt/nfs/austin_shared/mp_data_gen/distilabel/out/lc_sft')
 AVAILABLE_GPUS = [0, 1, 2, 3]
 PATH_SUBSTITUTION = ('/lustre/fsn1/projects/rech/eya/uzj46do/pdfs/', '/mnt/nfs/pdfs/')
 
+PIPELINE_NAME = 'single_page_q_v0'
+
 def get_lm_config(
     path: str, 
     data_ratio: float = 1.0, 
@@ -115,10 +117,11 @@ def get_lm_config(
 stages = [
     Stage(
         lm_configs=[ # 72b, 32b, gpt-5-nano, gemini-2.5-flash-lite
-            get_lm_config('Qwen/Qwen2.5-VL-72B-Instruct', data_ratio=1.5, gpu_mesh=(1, 2)),
+            get_lm_config('Qwen/Qwen2.5-VL-72B-Instruct', data_ratio=1.0, gpu_mesh=(1, 2)),
             get_lm_config('Qwen/Qwen2.5-VL-32B-Instruct', data_ratio=1.0, gpu_mesh=(2, 1)),
-            get_lm_config('gpt-5-nano', data_ratio=0.5, gpu_mesh=(1, None)),
-            get_lm_config('gemini-2.5-flash-lite', data_ratio=3.0, gpu_mesh=(1, None)),
+            # get_lm_config('gpt-5-nano', data_ratio=0.5, gpu_mesh=(1, None)),
+            get_lm_config('gemini-2.5-flash-lite', data_ratio=1.0, gpu_mesh=(1, None)),
+            get_lm_config('gemini-2.5-flash', data_ratio=1.0, gpu_mesh=(1, None)),
         ],
         available_gpus=AVAILABLE_GPUS,
         max_dims=(1000, 1000),

@@ -21,8 +21,6 @@ class vLLMAPI:
         self.lm_config = lm_config
 
         self.num_gpus = 1
-        # self.gpu_offset = lm_config.gpu_offset
-        self.gmu = 0.9
         self.vllm_server_pid = None
 
         self.port = self.random_available_port()
@@ -50,10 +48,8 @@ class vLLMAPI:
         launch_vllm = [
             "vllm", "serve", self.lm_config.path,
             "--tensor-parallel-size", str(self.lm_config.tp_size),
-            "--dtype", "bfloat16",
             "--disable-log-requests",
             "--trust-remote-code",
-            "--gpu-memory-utilization", str(self.gmu),
             "--port", str(self.port),
         ]
 

@@ -31,8 +31,10 @@ DS_PATH = Path('/mnt/nfs/austin_shared/data/scraped_and_pdfa')
 IMAGES_DS_PATH = Path('/mnt/nfs/austin_shared/data/all_pdfs_images_ds')
 PDF_ROOT = Path('/mnt/nfs/pdfs')
 CACHE_DIR = Path('/mnt/nfs/austin_shared/mp_data_gen/distilabel/out/lc_sft')
-AVAILABLE_GPUS = [4, 5, 6, 7]
+AVAILABLE_GPUS = [0, 1, 2, 3]
 PATH_SUBSTITUTION = ('/lustre/fsn1/projects/rech/eya/uzj46do/pdfs/', '/mnt/nfs/pdfs/')
+
+PIPELINE_NAME = 'true_multi_page_q_v0'
 
 def question_generation_lm_config(
     path: str,
@@ -94,9 +96,10 @@ stages = [
     Stage(
         lm_configs=[
             # 72b, gpt-5-nano, gemini-2.5-flash-lite
-            question_generation_lm_config('Qwen/Qwen2.5-VL-72B-Instruct', data_ratio=4.0, gpu_mesh=(2, 2)),
-            question_generation_lm_config('gpt-5-nano', data_ratio=1.0, gpu_mesh=(1, None)),
-            question_generation_lm_config('gemini-2.5-flash-lite', data_ratio=1.0, gpu_mesh=(1, None)),
+            question_generation_lm_config('Qwen/Qwen2.5-VL-72B-Instruct', data_ratio=1.0, gpu_mesh=(2, 2)),
+            # question_generation_lm_config('gpt-5-nano', data_ratio=1.0, gpu_mesh=(1, None)),
+            question_generation_lm_config('gemini-2.5-flash-lite', data_ratio=0.5, gpu_mesh=(1, None)),
+            question_generation_lm_config('gemini-2.5-flash', data_ratio=0.5, gpu_mesh=(1, None)),
         ],
         available_gpus=AVAILABLE_GPUS,
         max_dims=(1000, 1000),
@@ -114,7 +117,7 @@ stages = [
                 temperature=0.2,
                 max_new_tokens=4096,
                 tp_size=1,
-                replicas=4,
+                replicas=3,
                 vllm_kwargs={
                     'limit-mm-per-prompt': "'{\"image\": 1}'",
                     'max-model-len': '32768',
@@ -151,7 +154,7 @@ stages = [
                 temperature=0.7,
                 max_new_tokens=16384,
                 tp_size=1,
-                replicas=2,
+                replicas=1,
                 vllm_kwargs={
                     'max-model-len': '32768',
                     'gpu-memory-utilization': 0.95,
@@ -161,24 +164,6 @@ stages = [
                 system_template_path='distilabel/prompts/question_requirements.txt',
                 prompt_sampler_config=PromptSamplerConfig(),
             ),
-            # LMConfig(
-            #     path='gpt-4.1-mini',
-            #     data_ratio=1.0,
-            #     task_name='question_requirements',
-            #     temperature=0.7,
-            #     max_new_tokens=8192,
-            #     tp_size=None,
-            #     replicas=1,
-            #     vllm_kwargs={
-            #         'limit-mm-per-prompt': "'{\"image\": 0}'",
-            #         'max-model-len': '32768',
-            #         'gpu-memory-utilization': 0.9,
-            #         'quantization': 'fp8',
-            #     },
-            #     out_model='QuestionRequirements',
-            #     system_template_path='distilabel/prompts/question_requirements.txt',
-            #     prompt_sampler_config=PromptSamplerConfig(),
-            # ),
         ],
         available_gpus=AVAILABLE_GPUS,
         max_dims=(1000, 1000),
@@ -188,10 +173,10 @@ stages = [
     Stage(
         lm_configs=[
             # gpt-5-mini, gemini-2.5-flash, 72b
-            judge_answers_lm_config('Qwen/Qwen2.5-VL-72B-Instruct', data_ratio=1.0, gpu_mesh=(2, 2)),
+            judge_answers_lm_config('Qwen/Qwen2.5-VL-72B-Instruct', data_ratio=2.0, gpu_mesh=(2, 2)),
             # judge_answers_lm_config('gpt-5-nano', data_ratio=1.0, gpu_mesh=(1, None)),
             judge_answers_lm_config('gemini-2.5-flash-lite', data_ratio=1.0, gpu_mesh=(1, None)),
-            judge_answers_lm_config('Qwen/Qwen3-30B-A3B-Instruct-2507-FP8', data_ratio=2.0, gpu_mesh=(1, None)),
+            # judge_answers_lm_config('Qwen/Qwen3-30B-A3B-Instruct-2507-FP8', data_ratio=2.0, gpu_mesh=(1, 1)),
         ],
         available_gpus=AVAILABLE_GPUS,
         max_dims=(1000, 1000),

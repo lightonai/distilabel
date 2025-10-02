@@ -621,7 +621,7 @@ def remove_pdfs_with_pages_(
         n_jobs=num_proc,
     )
     return dataset.filter(
-        hf_batched(lambda x: less_than <= fn_to_page_count[pdf_name(row_to_ifn(x))] <= more_than),
+        hf_batched(lambda x: less_than <= fn_to_page_count.get(pdf_name(row_to_ifn(x)), 0) <= more_than),
         batched=True,
         num_proc=num_proc,
     )

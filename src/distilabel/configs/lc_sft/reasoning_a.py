@@ -27,8 +27,10 @@ MP_DS_PATH = Path('/mnt/nfs/austin_shared/mp_data_gen/distilabel/out/lc_sft/true
 IMAGES_DS_PATH = Path('/mnt/nfs/austin_shared/data/all_pdfs_images_ds')
 PDF_ROOT = Path('/mnt/nfs/pdfs')
 CACHE_DIR = Path('/mnt/nfs/austin_shared/mp_data_gen/distilabel/out/lc_sft')
-AVAILABLE_GPUS = [4, 5, 6, 7]
+AVAILABLE_GPUS = [0, 1, 2, 3]
 PATH_SUBSTITUTION = ('/lustre/fsn1/projects/rech/eya/uzj46do/pdfs/', '/mnt/nfs/pdfs/')
+
+PIPELINE_NAME = 'reasoning_a_v0'
 
 stages = [
     # Stage 0: transcribe
@@ -67,8 +69,8 @@ stages = [
                 task_name='answer',
                 temperature=1.0,
                 max_new_tokens=65536,
-                tp_size=None,
-                replicas=1,
+                tp_size=1,
+                replicas=4,
                 vllm_kwargs={
                     'gpu-memory-utilization': 0.92,
                 },
@@ -79,7 +81,7 @@ stages = [
             ),
             LMConfig(
                 path='Qwen/Qwen3-235B-A22B-Thinking-2507-FP8',
-                data_ratio=4.0,
+                data_ratio=2.0,
                 task_name='answer',
                 temperature=1.0,
                 max_new_tokens=65536,

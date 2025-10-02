@@ -34,6 +34,7 @@ from distilabel.configs.lc_sft.single_page_q import (
     PDF_ROOT,
     CACHE_DIR,
     IMAGES_DS_PATH,
+    PIPELINE_NAME,
 )
 
 def _resolve_path(path: str) -> str:
@@ -41,7 +42,7 @@ def _resolve_path(path: str) -> str:
 
 def get_ds(n: int, front=True) -> Dataset:
     dataset = load_from_disk(DS_PATH)
-    dataset = dataset.shuffle(seed=0)
+    dataset = dataset.shuffle(seed=1)
     n = min(n, len(dataset))
     dataset = dataset.select(range(n) if front else range(len(dataset) - n, len(dataset)))
     dataset = dataset.map(lambda x: {'source': [_resolve_path(x['image_filename'])]}, num_proc=32)
@@ -59,13 +60,13 @@ def run_pipeline(config: Config):
     stages = config.stages
     # dataset = get_ds(5_000_000, front=True)
     # dataset = get_ds(20_000, front=True)
-    dataset = get_ds(4_000 * 2, front=True)
-    dataset = utils.remove_pdfs_from_dataset(dataset, EXCLUDE_PDFS, row_to_ifn=lambda row: row['source'][0])
-    dataset = utils.remove_pdfs_with_pages_(dataset, PDF_ROOT, CACHE_DIR, less_than=2, more_than=336, row_to_ifn=lambda row: row['source'][0])
+    dataset = get_ds(15_000, front=True)
+    dataset = utils.remove_pdfs_from_dataset(dataset, EXCLUDE_PDFS, row_to_ifn=lambda row: row['source'][0], num_proc=32)
+    dataset = utils.remove_pdfs_with_pages_(dataset, PDF_ROOT, CACHE_DIR, less_than=2, more_than=336, row_to_ifn=lambda row: row['source'][0], num_proc=32)
     # dataset = get_ds(100)
 
     with Pipeline(
-        name="single_page_q",
+        name=PIPELINE_NAME,
         description="Load mp synthetic data, sample system prompts and generate questions and answers",
         cache_dir=CACHE_DIR / 'single_page_q',
     ) as pipeline:
@@ -300,7 +301,7 @@ if __name__ == "__main__":
 
     # split_sizes = [1_000_000] * 3 + [300_000] * 6
     # split_sizes = [4_000] * 3 + [1_500] * 6
-    split_sizes = [1800] * 3 + [600] * 6
+    split_sizes = [1_000] * 9
     # split_sizes = [5] * 9
     ratio_to_fulfill = len(distiset) / sum(split_sizes)
     print(f"ratio of split_sizes that can be fulfilled: {ratio_to_fulfill}")
