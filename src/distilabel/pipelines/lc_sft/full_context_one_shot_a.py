@@ -80,7 +80,7 @@ def run_pipeline(config: Config, dataset: Dataset, pipeline_name: str):
                 input_formatter=lm.format_input,
                 parallel_input_formatter=lm.parallel_format_inputs,
                 input_batch_size=BATCH_SIZE,
-                resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.tp_size),
+                resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.tp_size, oversubscribe=lm.lm_config.replicas_per_vllm_server),
                 output_mappings={'generation': 'md', 'system': 'transcribe_system', 'model_name': 'transcribe_model_name'},
                 **lm.lm_config.task_kwargs,
             )
@@ -142,7 +142,7 @@ def run_pipeline(config: Config, dataset: Dataset, pipeline_name: str):
                 parallel_input_formatter=lm.parallel_format_inputs,
                 lm_input_cols=['question'],
                 input_batch_size=BATCH_SIZE,
-                resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.tp_size),
+                resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.tp_size, oversubscribe=lm.lm_config.replicas_per_vllm_server),
                 output_mappings={
                     'system': 'answer_system', 
                     'model_name': 'answer_model_name', 
@@ -233,20 +233,4 @@ if __name__ == '__main__':
         n_workers=16,
     )
 
-    full_context_one_shot_hn = distiset.filter(
-        utils.hf_batched(
-            lambda row: 'full_context_one_shot_hn' in row['split']
-        ),
-        batched=True,
-        num_proc=1,
-    )
-    full_context_one_shot_doc = distiset.filter(
-        utils.hf_batched(
-            lambda row: 'full_context_one_shot_doc' in row['split']
-        ),
-        batched=True,
-        num_proc=1,
-    )
-
-    full_context_one_shot_hn.save_to_disk(CACHE_DIR / 'full_context_one_shot_hn_vds')
-    full_context_one_shot_doc.save_to_disk(CACHE_DIR / 'full_context_one_shot_doc_vds')
+    distiset.save_to_disk(CACHE_DIR / 'full_context_one_shot_vds')

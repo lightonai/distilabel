@@ -30,7 +30,7 @@ from typing import (
     overload,
 )
 
-from pydantic import BaseModel, ConfigDict, Field, PositiveInt, PrivateAttr
+from pydantic import BaseModel, ConfigDict, Field, PositiveInt, PrivateAttr, model_validator
 from typing_extensions import Annotated, Self
 
 from distilabel.errors import DistilabelTypeError, DistilabelUserError
@@ -126,6 +126,9 @@ class StepResources(RuntimeParametersMixin, BaseModel):
     gpus: Optional[RuntimeParameter[PositiveInt]] = Field(
         default=None, description="The number of GPUs assigned to each step replica."
     )
+    oversubscribe: Optional[RuntimeParameter[PositiveInt]] = Field(
+        default=1, description="The factor by which to oversubscribe the step replicas to the resources."
+    )
     memory: Optional[RuntimeParameter[PositiveInt]] = Field(
         default=None, description="The memory in bytes required for each step replica."
     )
@@ -134,6 +137,17 @@ class StepResources(RuntimeParametersMixin, BaseModel):
         description="A dictionary containing names of custom resources and the"
         " number of those resources required for each step replica.",
     )
+
+    @model_validator(mode="after")
+    def _validate_oversubscribe_factor(self) -> "StepResources":
+        replicas = self.replicas
+        oversubscribe = self.oversubscribe
+        if isinstance(replicas, int) and replicas > 0 and isinstance(oversubscribe, int) and oversubscribe > 0:
+            if replicas % oversubscribe != 0:
+                raise DistilabelUserError(
+                    "`oversubscribe` must be a factor of `replicas` (replicas % oversubscribe == 0)."
+                )
+        return self
 
 
 class _Step(

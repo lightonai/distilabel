@@ -29,21 +29,4 @@ if __name__ == '__main__':
         n_workers=16,
     )
 
-    # split between short and long
-    recursive_hn = distiset.filter(
-        utils.hf_batched(
-            lambda row: 'recursive_hn' in row['split']
-        ),
-        batched=True,
-        num_proc=1,
-    )
-    recursive_doc = distiset.filter(
-        utils.hf_batched(
-            lambda row: 'recursive_doc' in row['split']
-        ),
-        batched=True,
-        num_proc=1,
-    )
-
-    recursive_hn.save_to_disk(CACHE_DIR / 'recursive_hn_vds')
-    recursive_doc.save_to_disk(CACHE_DIR / 'recursive_doc_vds')
+    distiset.save_to_disk(CACHE_DIR / 'recursive_vds')

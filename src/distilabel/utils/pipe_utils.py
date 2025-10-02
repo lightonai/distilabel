@@ -20,7 +20,7 @@ def steps_to_load_groups(steps: list[Step], n_gpus: int) -> list[list[str]]:
         if not hasattr(step, 'resources') or step.resources.gpus is None:
             load_group.append(step.name)
             continue
-        requested_gpus = step.resources.gpus * step.resources.replicas
+        requested_gpus = (step.resources.gpus * step.resources.replicas) // step.resources.oversubscribe
         assert requested_gpus <= n_gpus, 'No single step can use more gpus than available'
         # Since I can't break up replicas into different load groups, you may need to make duplicate tasks so that they can be split
         if (load_group_gpus + requested_gpus) > n_gpus:
@@ -100,6 +100,7 @@ def make_lms(config: Config, stage: Stage, use_cache: bool = False, invalidate_c
             use_running_vllm=config.use_running_vllm,
             use_cache=use_cache,
             invalidate_cache=invalidate_cache,
+            replicas_per_vllm_server=lm_config.replicas_per_vllm_server,
         ) 
         for lm_config in stage.lm_configs
     ]

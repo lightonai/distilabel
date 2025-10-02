@@ -56,7 +56,7 @@ def run_pipeline(config: Config, dataset: Dataset):
                 input_formatter=lm.format_input,
                 parallel_input_formatter=lm.parallel_format_inputs,
                 input_batch_size=256,
-                resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.tp_size),
+                resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.tp_size, oversubscribe=lm.lm_config.replicas_per_vllm_server),
                 output_mappings={'system': 'page_number_system', 'model_name': 'page_number_model_name'},
                 use_cache=True,
                 invalidate_cache=True,

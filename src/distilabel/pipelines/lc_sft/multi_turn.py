@@ -140,7 +140,7 @@ def _lm_generation_task(
         lm_input_col_prefixes=lm_input_col_prefixes,
         extra_cols=extra_cols,
         input_batch_size=BATCH_SIZE,
-        resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.tp_size),
+        resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.tp_size, oversubscribe=lm.lm_config.replicas_per_vllm_server),
         output_mappings=output_mappings,
         input_mappings=input_mappings,
         **lm.lm_config.task_kwargs,

@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Dict, Generator, List, Literal, Union
 
 import portalocker
-from pydantic import BaseModel, Field, PositiveInt, PrivateAttr
+from pydantic import BaseModel, Field, NonNegativeInt, PrivateAttr
 
 from distilabel.mixins.runtime_parameters import RuntimeParameter
 
@@ -69,7 +69,7 @@ class CudaDevicePlacementMixin(BaseModel):
     )
 
     _llm_identifier: Union[str, None] = PrivateAttr(default=None)
-    _desired_num_gpus: PositiveInt = PrivateAttr(default=1)
+    _desired_num_gpus: NonNegativeInt = PrivateAttr(default=1)
     _available_cuda_devices: List[int] = PrivateAttr(default_factory=list)
     _can_check_cuda_devices: bool = PrivateAttr(default=False)
 
@@ -78,6 +78,8 @@ class CudaDevicePlacementMixin(BaseModel):
     def load(self) -> None:
         """Assign CUDA devices to the LLM based on the device placement information provided
         in `_device_llm_placement_map`."""
+        if self._desired_num_gpus == 0:
+            self.disable_cuda_device_placement = True
 
         if self.disable_cuda_device_placement:
             return

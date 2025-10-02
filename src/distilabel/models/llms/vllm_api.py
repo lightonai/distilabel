@@ -4,11 +4,14 @@ import random
 import time
 import os
 import signal
+import logging
 
 import openai
 
 from distilabel import utils
 from distilabel.pydantics import LMConfig
+
+_logger = logging.getLogger('vllm_api')
 
 class vLLMAPI:
     '''vLLM API base class.
@@ -65,8 +68,8 @@ class vLLMAPI:
             "echo", "$!",  # retrieve the PID of the actual vllm server
         ])
         
-        print(f'[{self.gpu}] Initializing vLLM Server...')
-        print('='*70)
+        _logger.info(f'[{self.gpu}] Initializing vLLM Server...')
+        time.sleep(self.gpu * 5)
         with utils.suppress_output(debug=False):
             process = subprocess.Popen(  # noqa: S602
                 ' '.join(launch_vllm),
@@ -82,8 +85,7 @@ class vLLMAPI:
             while time.perf_counter() - t0 < timeout:
                 try:
                     self.establish_client_vllm()
-                    print(f'[{self.gpu}] vLLM Server Initialized')
-                    print('='*70)
+                    _logger.info(f'[{self.gpu}] vLLM Server Initialized')
                 except openai.APIConnectionError:
                     time.sleep(5)
                 else:
@@ -97,6 +99,34 @@ class vLLMAPI:
         '''Establish a openai client to the vLLM server.'''
         self.client = openai.OpenAI(api_key='empty', base_url=f'http://localhost:{self.port}/v1')
         self.model_name = self.client.models.list().data[0].id
+
+    def wait_for_existing_server(self, port: int, pid: int, timeout=600):
+        '''Wait for an existing vLLM server to be ready on the specified port.
+        
+        This is used when multiple replicas share a single vLLM server.
+        One replica starts the server, and others wait for it to be ready.
+        
+        Args:
+            port: The port the vLLM server is running on
+            pid: The PID of the vLLM server process
+            timeout: Maximum time to wait in seconds
+        '''
+        self.port = port
+        self.vllm_server_pid = pid
+        
+        _logger.info(f'[{self.gpu}] Waiting for existing vLLM Server on port {port}...')
+        
+        t0 = time.perf_counter()
+        while time.perf_counter() - t0 < timeout:
+            try:
+                self.establish_client_vllm()
+                _logger.info(f'[{self.gpu}] Connected to existing vLLM Server')
+                return
+            except openai.APIConnectionError:
+                time.sleep(5)
+        
+        err = f'vllm server on port {port} failed to become ready within timeout {timeout}s'
+        raise RuntimeError(err)
 
     def cleanup(self):
         '''Kill the vLLM server.'''
@@ -114,10 +144,10 @@ class vLLMAPI:
         if is_process_running(pid):
             try:
                 os.kill(pid, signal.SIGTERM)
-                print(f'[{self.gpu}] Server with PID {pid} has been sent SIGTERM.')
+                _logger.info(f'[{self.gpu}] Server with PID {pid} has been sent SIGTERM.')
                 time.sleep(10)  # Allow time for cleanup
                 if is_process_running(pid):
                     os.kill(pid, signal.SIGKILL)
-                    print(f'[{self.gpu}] Server with PID {pid} has been killed.')
+                    _logger.info(f'[{self.gpu}] Server with PID {pid} has been killed.')
             except ProcessLookupError:
-                print(f'[{self.gpu}] Server with PID {pid} does not exist.')
+                _logger.warning(f'[{self.gpu}] Server with PID {pid} does not exist.')

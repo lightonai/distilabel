@@ -52,7 +52,7 @@ stages = [
         lm_configs=[ # 72b, gemini flash, gpt 5 mini, Qwen/Qwen3-VL-235B-A22B-Instruct-FP8
             answer_lm_config('gemini-2.5-flash', data_ratio=1.0, gpu_mesh=(1, None)),
             answer_lm_config('gemini-2.5-flash-lite', data_ratio=1.0, gpu_mesh=(1, None)),
-            answer_lm_config('Qwen/Qwen3-VL-235B-A22B-Instruct', data_ratio=2.0, gpu_mesh=(1, 4)),
+            answer_lm_config('RedHatAI/Qwen3-VL-235B-A22B-Instruct-FP8-block', data_ratio=2.0, gpu_mesh=(1, 4)),
         ],
         available_gpus=AVAILABLE_GPUS,
         max_dims=(1000, 1000),

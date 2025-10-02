@@ -80,7 +80,7 @@ stages = [
     # Qwen/Qwen3-235B-A22B-Instruct-2507-FP8, gemini flash, gpt 5 mini (temperature=1)
     Stage(
         lm_configs=[
-            answer_lm_config('Qwen/Qwen3-235B-A22B-Instruct-2507-FP8', data_ratio=1.0, gpu_mesh=(1, 4)),
+            answer_lm_config('RedHatAI/Qwen3-VL-235B-A22B-Instruct-FP8-block', data_ratio=1.0, gpu_mesh=(1, 4)),
             answer_lm_config('gemini-2.5-flash', data_ratio=1.0, gpu_mesh=(1, None)),
         ],
         available_gpus=AVAILABLE_GPUS,

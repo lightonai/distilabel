@@ -20,9 +20,9 @@ classifiers = [
 dependencies = [
     # Bump `datasets` to support `load_dataset` from cache
     # Ref https://github.com/huggingface/datasets/releases/tag/2.16.0
-    "torch == 2.7.1",
-    "vllm == 0.10.1",
-    "transformers == 4.56.1",
+    "torch == 2.8.0",
+    "vllm == 0.10.2",
+    "transformers @ git+https://github.com/huggingface/transformers",
     "datasets == 3.6.0",
     "openai == 1.99.1",
     "pypdfium2 == 4.30.0",
@@ -42,6 +42,7 @@ dependencies = [
     "orjson >= 3.10.0",
     "universal_pathlib >= 0.2.2",
     "portalocker >= 2.8.2",
+    "PyPDF2",
 ]
 dynamic = ["version"]
 

@@ -77,6 +77,9 @@ def run_pipeline(config: Config):
         load_data = LoadDataFromDataset(name='load_data', dataset=dataset, batch_size=BATCH_SIZE)
 
         lms = pipe_utils.make_lms(config, stage, use_cache=True)
+        answer_router = pipe_utils.data_router(
+            step_distribution=[lm.lm_config.data_ratio for lm in lms]
+        )
         generate_answers = [
             LMGenerationTask(
                 name=f"answer_generation_{i}",
@@ -87,9 +90,10 @@ def run_pipeline(config: Config):
                 parallel_input_formatter=lm.parallel_format_inputs,
                 lm_input_cols=['question'],
                 input_batch_size=BATCH_SIZE,
-                resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.tp_size),
+                resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.tp_size, oversubscribe=lm.lm_config.replicas_per_vllm_server),
                 output_mappings={'system': 'answer_system', 'model_name': 'answer_model_name', 'generation': 'answer'},
                 use_cache=True,
+                invalidate_cache=True,
                 **lm.lm_config.task_kwargs,
             )
             for i, lm in enumerate(lms)
@@ -111,7 +115,7 @@ def run_pipeline(config: Config):
             # use_cache=True,
         )
 
-        load_data >> generate_answers >> drop_none_answers >> add_distant
+        load_data >> answer_router >> generate_answers >> drop_none_answers >> add_distant
 
     distiset, cost_tracker = pipeline.run(
         load_groups=(

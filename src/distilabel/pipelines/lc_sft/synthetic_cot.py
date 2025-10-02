@@ -110,7 +110,7 @@ def run_pipeline(config: Config, dataset: Dataset):
                 lm_input_cols=['question'],
                 lm_input_col_prefixes=['Given question: '],
                 input_batch_size=BATCH_SIZE,
-                resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.tp_size),
+                resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.tp_size, oversubscribe=lm.lm_config.replicas_per_vllm_server),
                 output_mappings={'system': 'evidence_system', 'model_name': 'evidence_model_name'},
                 **lm.lm_config.task_kwargs,
             )
@@ -207,7 +207,7 @@ def run_pipeline(config: Config, dataset: Dataset):
                 lm_input_cols=['combined_evidence', 'question'],
                 lm_input_col_prefixes=['Per-page relevant context and your current chain of thought (feel free to correct your previous mistakes): ', ''],
                 input_batch_size=BATCH_SIZE,
-                resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.tp_size),
+                resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.tp_size, oversubscribe=lm.lm_config.replicas_per_vllm_server),
                 extra_cols=['combined_evidence'],
                 output_mappings={
                     'generation': 'answer',
@@ -245,7 +245,7 @@ def run_pipeline(config: Config, dataset: Dataset):
                 parallel_input_formatter=lm.parallel_format_inputs,
                 lm_input_cols=['question'],
                 input_batch_size=BATCH_SIZE,
-                resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.tp_size),
+                resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.tp_size, oversubscribe=lm.lm_config.replicas_per_vllm_server),
                 output_mappings={
                     'system': 'answer_system', 
                     'model_name': 'answer_model_name', 
@@ -418,3 +418,9 @@ if __name__ == '__main__':
     )
 
     distiset.save_to_disk(CACHE_DIR / 'synthetic_cot_vds')
+
+    hn = distiset.filter(utils.hf_batched(lambda row: 'hn' in row['split']), batched=True, num_proc=16).remove_columns(['split'])
+    doc = distiset.filter(utils.hf_batched(lambda row: 'doc' in row['split']), batched=True, num_proc=16).remove_columns(['split'])
+
+    hn.save_to_disk(CACHE_DIR / 'synthetic_cot_hn_vds')
+    doc.save_to_disk(CACHE_DIR / 'synthetic_cot_doc_vds')

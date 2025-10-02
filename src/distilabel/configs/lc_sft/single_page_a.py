@@ -25,7 +25,7 @@ PIPELINE_NAME = 'single_page_a_v0'
 def answer_lm_config(
     path: str, 
     data_ratio: float = 1.0, 
-    gpu_mesh: tuple[int | None, int | None] = (1, 1)
+    gpu_mesh: tuple[int | None, int | None, int | None] = (1, 1, 1)
 ):
     temperature = 0.7
     if 'gpt-5' in path:
@@ -36,8 +36,9 @@ def answer_lm_config(
         task_name='answer_generation',
         temperature=temperature,
         max_new_tokens=16384,
-        tp_size=gpu_mesh[1],
         replicas=gpu_mesh[0],
+        tp_size=gpu_mesh[1],
+        replicas_per_vllm_server=gpu_mesh[2],
         vllm_kwargs={
             'limit-mm-per-prompt': "'{\"image\": 1}'",
             'max-model-len': '32768',
@@ -51,12 +52,13 @@ def answer_lm_config(
 
 stages = [
     Stage(
-        lm_configs=[ # 72b, gemini flash, gpt 5 mini, Qwen/Qwen3-VL-235B-A22B-Instruct-FP8
-            answer_lm_config('gemini-2.5-flash', data_ratio=0.5, gpu_mesh=(1, None)),
-            answer_lm_config('gemini-2.5-flash-lite', data_ratio=1.0, gpu_mesh=(1, None)),
+        lm_configs=[ # 72b, gemini flash, gpt 5 mini, RedHatAI/Qwen3-VL-235B-A22B-Instruct-FP8-block
+            answer_lm_config('gemini-2.5-flash', data_ratio=0.5, gpu_mesh=(1, None, 1)),
+            answer_lm_config('gemini-2.5-flash-lite', data_ratio=1.0, gpu_mesh=(1, None, 1)),
             # answer_lm_config('gpt-5-mini', data_ratio=0.1, gpu_mesh=(1, None)),
             # answer_lm_config('gpt-5-nano', data_ratio=1.0, gpu_mesh=(1, None)),
-            answer_lm_config('Qwen/Qwen3-VL-235B-A22B-Instruct-FP8', data_ratio=2.0, gpu_mesh=(1, 4)),
+            answer_lm_config('RedHatAI/Qwen3-VL-235B-A22B-Instruct-FP8-block', data_ratio=2.0, gpu_mesh=(2, 4, 2)),
+            # answer_lm_config('Qwen/Qwen2.5-VL-32B-Instruct', data_ratio=2.0, gpu_mesh=(2, 1, 2)),
         ],
         available_gpus=AVAILABLE_GPUS,
         max_dims=(1000, 1000),

@@ -67,6 +67,8 @@ class LMConfig(BaseModel):
     '''number of gpus to use for the model, applies if using vllm'''
     replicas: int = 1
     '''number of replicas to create'''
+    replicas_per_vllm_server: int = 1
+    '''number of model replicas that share a single vLLM server instance (oversubscription factor)'''
     vllm_kwargs: dict[str, Any] = {}
     '''kwargs passed directly to vllm. Use None as a value if the kwarg is just a flag'''
 

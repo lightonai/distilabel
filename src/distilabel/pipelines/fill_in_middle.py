@@ -69,7 +69,7 @@ def run_pipeline(config: Config):
                 input_formatter=lm.format_input,
                 parallel_input_formatter=lm.parallel_format_inputs,
                 input_batch_size=BATCH_SIZE,
-                resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.tp_size),
+                resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.tp_size, oversubscribe=lm.lm_config.replicas_per_vllm_server),
                 output_mappings={'system': 'transcribe_system', 'model_name': 'transcribe_model_name', 'generation': 'md'},
                 # invalidate_cache=True,
                 **lm.lm_config.task_kwargs,

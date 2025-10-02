@@ -23,6 +23,7 @@ from distilabel.constants import LAST_BATCH_SENT_FLAG
 from distilabel.errors import DISTILABEL_DOCS_URL
 from distilabel.exceptions import DistilabelOfflineBatchGenerationNotFinishedException
 from distilabel.models.mixins.cuda_device_placement import CudaDevicePlacementMixin
+from distilabel.models.mixins.vllm_server_placement import VLLMServerPlacementMixin
 from distilabel.pipeline.batch import _Batch
 from distilabel.steps.base import GeneratorStep, Step, _Step
 from distilabel.typing import StepLoadStatus
@@ -86,16 +87,26 @@ class _StepWrapper:
                 attr.disable_cuda_device_placement = True
             else:
                 desired_num_gpus = self.step.resources.gpus or 1
+                if self.step.resources.oversubscribe > 1 and (self.replica % self.step.resources.oversubscribe) != 0:
+                    desired_num_gpus = 0
                 attr._llm_identifier = f"{self.step.name}-replica-{self.replica}"
                 attr._desired_num_gpus = desired_num_gpus
+        
+        def _init_vllm_server_placement_mixin(attr: VLLMServerPlacementMixin) -> None:
+            attr._replica_id = self.replica
 
         for field_name in self.step.model_fields_set:
             attr = getattr(self.step, field_name)
             if isinstance(attr, CudaDevicePlacementMixin):
                 _init_cuda_device_placement_mixin(attr)
+            if isinstance(attr, VLLMServerPlacementMixin):
+                _init_vllm_server_placement_mixin(attr)
 
         if isinstance(self.step, CudaDevicePlacementMixin):
             _init_cuda_device_placement_mixin(self.step)
+
+        if isinstance(self.step, VLLMServerPlacementMixin):
+            _init_vllm_server_placement_mixin(self.step)
 
     def run(self) -> str:
         """The target function executed by the process. This function will also handle

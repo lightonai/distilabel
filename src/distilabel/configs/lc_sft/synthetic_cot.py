@@ -103,7 +103,7 @@ stages = [
             # lc_mm_overall_answer_lm_config('gpt-5-nano', data_ratio=1.0, gpu_mesh=(1, None)),
             lc_mm_overall_answer_lm_config('gemini-2.5-flash', data_ratio=0.5, gpu_mesh=(1, None)),
             lc_mm_overall_answer_lm_config('gemini-2.5-flash-lite', data_ratio=0.5, gpu_mesh=(1, None)),
-            lc_mm_overall_answer_lm_config('Qwen/Qwen3-VL-235B-A22B-Instruct', data_ratio=1.0, gpu_mesh=(1, 4)),
+            lc_mm_overall_answer_lm_config('RedHatAI/Qwen3-VL-235B-A22B-Instruct-FP8-block', data_ratio=1.0, gpu_mesh=(1, 4)),
 
             # qwen 235 instruct
             # text only models

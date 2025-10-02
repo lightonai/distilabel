@@ -89,20 +89,4 @@ if __name__ == '__main__':
         n_workers=16,
     )
 
-    reasoning_hn = distiset.filter(
-        utils.hf_batched(
-            lambda row: 'reasoning_hn' in row['split']
-        ),
-        batched=True,
-        num_proc=1,
-    )
-    reasoning_doc = distiset.filter(
-        utils.hf_batched(
-            lambda row: 'reasoning_doc' in row['split']
-        ),
-        batched=True,
-        num_proc=1,
-    )
-
-    reasoning_hn.save_to_disk(CACHE_DIR / 'reasoning_hn_vds')
-    reasoning_doc.save_to_disk(CACHE_DIR / 'reasoning_doc_vds')
+    distiset.save_to_disk(CACHE_DIR / 'reasoning_vds')

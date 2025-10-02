@@ -1,6 +1,5 @@
 import os
-import hashlib
-import json
+from httpx import URL
 from pathlib import Path
 from typing import Any, Callable, cast
 from pydantic import ValidationError, Field, PrivateAttr
@@ -16,6 +15,7 @@ from tenacity import (
 from distilabel.models.llms import OpenAILLM, vLLMAPI
 from distilabel.models.mixins.cuda_device_placement import CudaDevicePlacementMixin
 from distilabel.models.mixins.vllm_server_placement import VLLMServerPlacementMixin
+from distilabel.models.mixins.vllm_server_sharing import VLLMServerSharingMixin
 from distilabel.typing import ChatType, FormattedInput, GenerateOutput
 
 from distilabel import utils
@@ -343,7 +343,7 @@ def structured_output(agenerate: Callable) -> Callable:
 
     return agenerate_structured
 
-class OpenAILM(OpenAILLM, CudaDevicePlacementMixin, VLLMServerPlacementMixin, VLM):
+class OpenAILM(OpenAILLM, CudaDevicePlacementMixin, VLLMServerPlacementMixin, VLLMServerSharingMixin, VLM):
     '''OpenAILLM wrapper for handling images 
     
     OpenAI is the default client
@@ -388,7 +388,6 @@ class OpenAILM(OpenAILLM, CudaDevicePlacementMixin, VLLMServerPlacementMixin, VL
                 base_url = os.environ.get('VLLM_API_BASE_URL', 'http://localhost:8000')
                 self.base_url = f'{base_url}/v1'
 
-        # must come after the base_url is set properly
         super().load()
         VLM.load(self)
         self.disable_cuda_device_placement = not self.lm_config.tp_size
@@ -396,11 +395,29 @@ class OpenAILM(OpenAILLM, CudaDevicePlacementMixin, VLLMServerPlacementMixin, VL
         
         # must come after CUDA_VISIBLE_DEVICES is set properly
         if self.use_vllm and not self.use_running_vllm:
-            # I want this to throw an error if the key is not set 
-            # because the visible devices should be set by the placement mixin
-            gpu = os.environ['CUDA_VISIBLE_DEVICES'].split(',')[0]
+            gpu = int(os.environ.get('CUDA_VISIBLE_DEVICES', '0').split(',')[0])
             self._vllm_api.gpu = gpu
-            self._vllm_api.start_vllm()
+            
+            # Check if we should share an existing vLLM server or start a new one
+            self.disable_vllm_server_sharing = self.lm_config.replicas_per_vllm_server <= 1
+            self.replicas_per_vllm_server = self.lm_config.replicas_per_vllm_server
+            self.model_path = self.lm_config.path
+            VLLMServerSharingMixin.load(self)
+            
+            if self._server_info['is_owner']:
+                # This replica is responsible for starting the vLLM server
+                self._vllm_api.start_vllm()
+                # Update the sharing map with the actual port and PID
+                VLLMServerSharingMixin.update_server_info(
+                    self, self._vllm_api.port, self._vllm_api.vllm_server_pid
+                )
+            else:
+                # This replica joins an existing vLLM server
+                self._vllm_api.wait_for_existing_server(
+                    self._server_info['port'], self._server_info['pid']
+                )
+                self.base_url = f'http://localhost:{self._vllm_api.port}/v1'
+        self._aclient.base_url = self._aclient._enforce_trailing_slash(URL(self.base_url))
 
     def _assign_cuda_devices(self):
         '''Override the default cuda device assignment to only assign to the available gpus'''
@@ -458,8 +475,16 @@ class OpenAILM(OpenAILLM, CudaDevicePlacementMixin, VLLMServerPlacementMixin, VL
 
     # also cleanup vLLM
     def unload(self) -> None:
-        if self.use_vllm and self._vllm_api:
+        # Check if we should cleanup the vLLM server
+        should_cleanup_vllm = True
+        if self.use_vllm and not self.use_running_vllm:
+            # Only cleanup if this is the last replica using the shared server
+            VLLMServerSharingMixin.unload(self)
+            should_cleanup_vllm = self._cleanup
+        
+        if should_cleanup_vllm and self.use_vllm and self._vllm_api:
             self._vllm_api.cleanup()
+        
         super().unload()
         CudaDevicePlacementMixin.unload(self)
         VLM.unload(self)
