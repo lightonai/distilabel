@@ -53,7 +53,7 @@ PIPELINE_NAME = 'unanswerable_v0'
 def get_lm_config(
     path: str, 
     data_ratio: float = 1.0, 
-    gpu_mesh: tuple[int | None, int | None] = (1, 1),
+    gpu_mesh: tuple[int | None, int | None, int | None] = (1, 1, 1),
 ):
     temperature = 0.7
     if 'gpt-5' in path:
@@ -64,14 +64,19 @@ def get_lm_config(
         task_name='qa_generation',
         temperature=temperature,
         max_new_tokens=16384,
-        tp_size=gpu_mesh[1],
         replicas=gpu_mesh[0],
+        tp_size=gpu_mesh[1],
+        replicas_per_vllm_server=gpu_mesh[2],
         vllm_kwargs={
             'limit-mm-per-prompt': "'{\"image\": 1}'",
-            'quantization': 'fp8',
             'max-model-len': '32768',
             'gpu-memory-utilization': 0.95,
-        },
+        } | ({'quantization': 'fp8'} if 'FP8-Dynamic' not in path else {
+            'max-num-batched-tokens': '4096',
+            'max-num-seqs': '8',
+            'enable-expert-parallel': None,
+            'mm-processor-cache-gb': '0',
+        }),
         out_model='UnanswerableQA',
         system_template_path='distilabel/prompts/unanswerable_qa.txt',
         prompt_sampler_config=question_prompt_sampler_config,
@@ -83,9 +88,9 @@ stages = [
             # get_lm_config('Qwen/Qwen2.5-VL-72B-Instruct', data_ratio=1.0, gpu_mesh=(1, 2)),
             # get_lm_config('Qwen/Qwen2.5-VL-32B-Instruct', data_ratio=1.0, gpu_mesh=(2, 1)),
             # get_lm_config('gpt-5-nano', data_ratio=1.0, gpu_mesh=(1, None)),
-            get_lm_config('gemini-2.5-flash', data_ratio=1.0, gpu_mesh=(1, None)),
-            get_lm_config('gemini-2.5-flash-lite', data_ratio=1.0, gpu_mesh=(1, None)),
-            get_lm_config('RedHatAI/Qwen3-VL-235B-A22B-Instruct-FP8-block', data_ratio=2.0, gpu_mesh=(1, 4)),
+            get_lm_config('gemini-2.5-flash', data_ratio=1.0, gpu_mesh=(1, None, 1)),
+            get_lm_config('gemini-2.5-flash-lite', data_ratio=1.0, gpu_mesh=(1, None, 1)),
+            get_lm_config('RedHatAI/Qwen3-VL-235B-A22B-Instruct-FP8-Dynamic', data_ratio=2.0, gpu_mesh=(2, 4, 2)),
         ],
         available_gpus=AVAILABLE_GPUS,
         max_dims=(1000, 1000),

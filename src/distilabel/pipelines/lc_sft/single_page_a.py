@@ -90,10 +90,9 @@ def run_pipeline(config: Config):
                 parallel_input_formatter=lm.parallel_format_inputs,
                 lm_input_cols=['question'],
                 input_batch_size=BATCH_SIZE,
-                resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.tp_size, oversubscribe=lm.lm_config.replicas_per_vllm_server),
+                resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.n_gpus, oversubscribe=lm.lm_config.replicas_per_vllm_server),
                 output_mappings={'system': 'answer_system', 'model_name': 'answer_model_name', 'generation': 'answer'},
                 use_cache=True,
-                invalidate_cache=True,
                 **lm.lm_config.task_kwargs,
             )
             for i, lm in enumerate(lms)
@@ -140,7 +139,7 @@ if __name__ == '__main__':
         distiset, 
         images_ds_path=IMAGES_DS_PATH,
         path_substitution=config.path_substitution,
-        cols_to_keep=['answer_model_name', 'split'], 
+        cols_to_keep=['answer_model_name'], 
         n_workers=16,
     )
     distiset.save_to_disk(CACHE_DIR / 'distractors_short_vds')

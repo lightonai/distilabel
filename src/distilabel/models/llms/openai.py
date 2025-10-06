@@ -382,14 +382,33 @@ class OpenAILLM(OpenAIBaseClient, AsyncLLM):
         reasoning_generations = []
         logprobs = []
         for choice in completion.choices:
-            if (content := choice.message.content) is None:
+            def _log_no_response():
                 self._logger.warning(  # type: ignore
                     f"Received no response using OpenAI client (model: '{self.model}')."
                     f" Finish reason was: {choice.finish_reason}"
                 )
-            generations.append(content)
+            if choice.message is None:
+                generations.append(None)
+                _log_no_response()
+                continue
+            if (content := choice.message.content) is None:
+                _log_no_response()
             if getattr(choice.message, 'reasoning_content', None):
                 reasoning_generations.append(choice.message.reasoning_content)
+            elif isinstance(content, str) and '</think>' in content:
+                reasoning_generations.append(
+                    content[:content.rfind('</think>')]
+                    .replace('<think>', '')
+                    .replace('</think>', '')
+                    .strip()
+                )
+                content = (
+                    content[content.rfind('</think>') + len('</think>'):]
+                    .replace('<think>', '')
+                    .replace('</think>', '')
+                    .strip()
+                )
+            generations.append(content)
             if choice_logprobs := self._get_logprobs_from_chat_completion_choice(
                 choice
             ):

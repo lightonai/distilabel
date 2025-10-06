@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import traceback
 import time
 from pathlib import Path
@@ -23,7 +24,7 @@ from distilabel.constants import LAST_BATCH_SENT_FLAG
 from distilabel.errors import DISTILABEL_DOCS_URL
 from distilabel.exceptions import DistilabelOfflineBatchGenerationNotFinishedException
 from distilabel.models.mixins.cuda_device_placement import CudaDevicePlacementMixin
-from distilabel.models.mixins.vllm_server_placement import VLLMServerPlacementMixin
+from distilabel.models.mixins.vllm_server_sharing import VLLMServerSharingMixin
 from distilabel.pipeline.batch import _Batch
 from distilabel.steps.base import GeneratorStep, Step, _Step
 from distilabel.typing import StepLoadStatus
@@ -79,6 +80,53 @@ class _StepWrapper:
         self._loaded = False
         self._cache_location = cache_location
 
+    def _sanitized_step_for_exception(self) -> "_Step":
+        """Return a sanitized copy of the step that is safe to pickle.
+
+        Strategy:
+        - Rebuild the step from its public fields using `model_dump` and
+          `model_validate` (avoids deepcopying objects that may hold thread locks).
+        - Explicitly null `_logger` on the rebuilt step and on any nested attributes
+          that may have their own `_logger`.
+        - Ensure obviously non-picklable runtime attachments like `pipeline` remain None.
+        """
+        data = self.step.model_dump(mode="python")
+        try:
+            step_copy = type(self.step).model_validate(data)  # type: ignore[attr-defined]
+        except Exception:
+            # As a fallback, build without validation. This sets fields directly.
+            step_copy = type(self.step).model_construct(**data)  # type: ignore[attr-defined]
+
+        # Remove pipeline reference if any
+        try:
+            if getattr(step_copy, "pipeline", None) is not None:
+                step_copy.pipeline = None  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
+        # Clear logger on the step
+        try:
+            if hasattr(step_copy, "_logger"):
+                step_copy._logger = None  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
+        # Best-effort cleanup of nested attributes with `_logger`
+        try:
+            for field_name in getattr(step_copy, "model_fields_set", []):
+                attr = getattr(step_copy, field_name, None)
+                if attr is None:
+                    continue
+                try:
+                    if hasattr(attr, "_logger"):
+                        attr._logger = None  # type: ignore[attr-defined]
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        return step_copy
+
     def _init_cuda_device_placement(self) -> None:
         """Sets the LLM identifier and the number of desired GPUs of the `CudaDevicePlacementMixin`"""
 
@@ -87,26 +135,24 @@ class _StepWrapper:
                 attr.disable_cuda_device_placement = True
             else:
                 desired_num_gpus = self.step.resources.gpus or 1
-                if self.step.resources.oversubscribe > 1 and (self.replica % self.step.resources.oversubscribe) != 0:
-                    desired_num_gpus = 0
                 attr._llm_identifier = f"{self.step.name}-replica-{self.replica}"
                 attr._desired_num_gpus = desired_num_gpus
-        
-        def _init_vllm_server_placement_mixin(attr: VLLMServerPlacementMixin) -> None:
+
+        def _init_vllm_server_sharing_mixin(attr: VLLMServerSharingMixin) -> None:
+            # Ensure replica id and llm identifier are propagated for sharing election
             attr._replica_id = self.replica
 
         for field_name in self.step.model_fields_set:
             attr = getattr(self.step, field_name)
             if isinstance(attr, CudaDevicePlacementMixin):
                 _init_cuda_device_placement_mixin(attr)
-            if isinstance(attr, VLLMServerPlacementMixin):
-                _init_vllm_server_placement_mixin(attr)
+            if isinstance(attr, VLLMServerSharingMixin):
+                _init_vllm_server_sharing_mixin(attr)
 
         if isinstance(self.step, CudaDevicePlacementMixin):
             _init_cuda_device_placement_mixin(self.step)
-
-        if isinstance(self.step, VLLMServerPlacementMixin):
-            _init_vllm_server_placement_mixin(self.step)
+        if isinstance(self.step, VLLMServerSharingMixin):
+            _init_vllm_server_sharing_mixin(self.step)
 
     def run(self) -> str:
         """The target function executed by the process. This function will also handle
@@ -141,7 +187,7 @@ class _StepWrapper:
                 self._notify_unload()
 
             if not isinstance(e, _StepWrapperException):
-                raise _StepWrapperException(str(e), self.step, 2, e) from e
+                raise _StepWrapperException(str(e), self._sanitized_step_for_exception(), 2, e) from e
             raise e
 
         if self._loaded:
@@ -161,11 +207,16 @@ class _StepWrapper:
             self.step.load()
             self._loaded = True
         except Exception as e:
+            # Log original traceback before sanitizing/forwarding
+            self.step._logger.error(
+                f"Load failed for step '{self.step.name}' (replica ID: {self.replica}): {e}\n"
+                f"{traceback.format_exc()}"
+            )
             self.step.unload()
             self._notify_load_failed()
             raise _StepWrapperException.create_load_error(
                 message=f"Step load failed: {e}",
-                step=self.step,
+                step=self._sanitized_step_for_exception(),
                 subprocess_exception=e,
             ) from e
 
@@ -244,7 +295,16 @@ class _StepWrapper:
                     )
                     return
         except Exception as e:
-            raise _StepWrapperException(str(e), self.step, 2, e) from e
+            raise _StepWrapperException(str(e), self._sanitized_step_for_exception(), 2, e) from e
+
+    def _count_none(self, data: List[Dict[str, Any]]) -> int:
+        return sum(
+            1 for row in data
+            if any(
+                row.get(self.step.output_mappings.get(col, col), -1) is None 
+                for col in self.step.outputs if col != 'reasoning'
+            )
+        )
 
     def _non_generator_process_loop(self) -> None:
         """Runs the process loop for a non-generator step. It will call the `process`
@@ -307,16 +367,20 @@ class _StepWrapper:
                 response = _Batch.from_json(cache_key)
                 response.route_step_last_batch = batch.route_step_last_batch
                 response.last_batch = batch.last_batch
-                if len(response.data[0]) == 0:
+                none_count = self._count_none(response.data[0])
+                if len(response.data[0]) == 0 or none_count >= 0.5 * len(response.data[0]):
                     self.step._logger.warning(
-                        f"Cache hit for batch {batch.seq_no} but response is empty. "
-                        "Consider invalidating the cache or manually removing the cache file."
+                        f"Cache hit for batch {batch.seq_no} but response is empty and/or "
+                        f"{none_count}/{len(response.data[0])} of its values are None. "
+                        "This cache will be removed."
                     )
-                self._send_batch(response)
-                self.step._logger.info(f"🔍 Cache hit for batch {batch.seq_no}")
-                if response.last_batch or response.route_step_last_batch:
-                    break
-                continue
+                    os.unlink(cache_key)
+                else:
+                    self.step._logger.info(f"🔍 Cache hit for batch {batch.seq_no}")
+                    self._send_batch(response)
+                    if response.last_batch or response.route_step_last_batch:
+                        break
+                    continue
 
             if batch == LAST_BATCH_SENT_FLAG:
                 self.step._logger.debug("Received `LAST_BATCH_SENT_FLAG`. Stopping...")
@@ -347,7 +411,7 @@ class _StepWrapper:
                         )
                         else None
                     )
-                    raise _StepWrapperException(str(e), self.step, 2, e, data) from e
+                    raise _StepWrapperException(str(e), self._sanitized_step_for_exception(), 2, e, data) from e
 
                 # Impute step outputs columns with `None`
                 result = self._impute_step_outputs(batch)
@@ -364,9 +428,12 @@ class _StepWrapper:
             finally:
                 batch.set_data([result])
                 if self.step.use_cache:
-                    if len(result) == 0:
+                    none_count = self._count_none(result)
+                    if len(result) == 0 or none_count >= 0.5 * len(result):
                         self.step._logger.warning(
-                            f"Batch {batch.seq_no} has no data. This batch will not be cached."
+                            f"Batch {batch.seq_no} response is empty and/or "
+                            f"{none_count}/{len(result)} of its values are None. "
+                            "This batch will not be cached."
                         )
                     else:
                         batch.cache(cache_key)

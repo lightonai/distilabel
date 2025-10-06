@@ -20,9 +20,9 @@ classifiers = [
 dependencies = [
     # Bump `datasets` to support `load_dataset` from cache
     # Ref https://github.com/huggingface/datasets/releases/tag/2.16.0
-    "torch == 2.8.0",
-    "vllm == 0.10.2",
-    "transformers @ git+https://github.com/huggingface/transformers",
+    "torch",
+    "vllm == 0.11.0",
+    "transformers == 4.57.0",
     "datasets == 3.6.0",
     "openai == 1.99.1",
     "pypdfium2 == 4.30.0",
@@ -54,7 +54,7 @@ distilabel = "distilabel.cli.app:app"
 
 [project.optional-dependencies]
 flash = [
-    "flash-attn == 2.8.0.post2",
+    "flash-attn == 2.8.3",
 ]
 dev = ["ruff == 0.8.1", "pre-commit >= 3.5.0"]
 docs = [
@@ -131,3 +131,4 @@ testpaths = ["tests"]
 [tool.uv]
 conflicts = []
 no-build-isolation-package = ["flash-attn"]
+# extra-index-url = ["https://wheels.vllm.ai/nightly"]

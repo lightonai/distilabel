@@ -83,16 +83,21 @@ class VLLMServerSharingMixin(BaseModel):
             return
 
         server_key = self._compute_server_key()
-        
-        if self._replica_id % self.replicas_per_vllm_server == 0:
-            with self._server_sharing_map() as sharing_map:
-                # Need to start a new server
+
+        # First-come election under a file lock to avoid races
+        creator = False
+        with self._server_sharing_map() as sharing_map:
+            server_data = sharing_map.get(server_key)
+            if server_data is None:
+                # Elect this replica as owner and create entry atomically
+                creator = True
                 self._is_server_owner = True
-                # Port and PID will be set after vLLM starts
                 sharing_map[server_key] = {
                     'model_path': self.model_path,
-                    'port': None,  # Will be updated after server starts
-                    'pid': None,   # Will be updated after server starts
+                    'port': None,
+                    'pid': None,
+                    'owner_identifier': self._llm_identifier,
+                    'owner_replica_id': int(self._replica_id),
                     'replica_identifiers': [self._llm_identifier],
                 }
                 self._server_info = {
@@ -101,26 +106,33 @@ class VLLMServerSharingMixin(BaseModel):
                     'is_owner': True,
                     'server_key': server_key,
                 }
-                _logger.info(
-                    f"🚀 LLM '{self._llm_identifier}' starting new vLLM server "
-                    f"(will support {self.replicas_per_vllm_server} replicas)"
-                )
+            else:
+                # Join existing server (may not be ready yet)
+                self._is_server_owner = False
+                server_data['replica_identifiers'] = list(set(server_data.get('replica_identifiers', []) + [self._llm_identifier]))
+                port = server_data.get('port')
+                pid = server_data.get('pid')
+                self._server_info = {
+                    'port': port,
+                    'pid': pid,
+                    'is_owner': False,
+                    'server_key': server_key,
+                }
+
+        if creator:
+            _logger.info(
+                f"🚀 LLM '{self._llm_identifier}' key='{server_key}' elected as owner of new vLLM server "
+                f"(will support {self.replicas_per_vllm_server} replicas)"
+            )
         else:
+            # Wait until the owner populates port/pid
             ready = self._wait_for_server_ready(server_key)
-            self._server_info = {
-                'port': ready['port'],
-                'pid': ready['pid'],
-                'is_owner': False,
-                'server_key': server_key,
-            }
-            with self._server_sharing_map() as sharing_map:
-                server_data = sharing_map[server_key]
-                server_data['replica_identifiers'].append(self._llm_identifier)
-                _logger.info(
-                    f"🔗 LLM '{self._llm_identifier}' joining existing vLLM server "
-                    f"on port {ready['port']} "
-                    f"(replica {len(server_data['replica_identifiers'])}/{self.replicas_per_vllm_server})"
-                )
+            self._server_info['port'] = ready['port']
+            self._server_info['pid'] = ready['pid']
+            _logger.info(
+                f"🔗 LLM '{self._llm_identifier}' joining existing vLLM server on port {ready['port']} "
+                f"(replica {len(server_data['replica_identifiers'])}/{self.replicas_per_vllm_server})"
+            )
 
     def update_server_info(self, port: int, pid: int) -> None:
         """Update the shared server info with port and PID after server starts.
@@ -137,6 +149,9 @@ class VLLMServerSharingMixin(BaseModel):
                 sharing_map[server_key]['pid'] = pid
                 self._server_info['port'] = port
                 self._server_info['pid'] = pid
+                _logger.info(
+                    f"🔗 LLM '{self._llm_identifier}' key='{server_key}' updated server info with port {port} and pid {pid}"
+                )
 
     def unload(self) -> None:
         """Unloads the LLM and removes it from the shared server.
@@ -223,7 +238,7 @@ class VLLMServerSharingMixin(BaseModel):
         key_str = json.dumps(key_data, sort_keys=True)
         return hashlib.sha256(key_str.encode()).hexdigest()[:16]
 
-    def _wait_for_server_ready(self, server_key: str, timeout: int = 600) -> Dict[str, Union[int, None]]:
+    def _wait_for_server_ready(self, server_key: str, timeout: int = 900) -> Dict[str, Union[int, None]]:
         """Block until the server owner updates port and pid for the given server key."""
         start = time.perf_counter()
         while time.perf_counter() - start < timeout:

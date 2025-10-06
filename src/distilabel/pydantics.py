@@ -65,6 +65,10 @@ class LMConfig(BaseModel):
     ## gpu section
     tp_size: int | None = None
     '''number of gpus to use for the model, applies if using vllm'''
+    pp_size: int | None = None
+    '''pipeline_parallel size, applies if using vllm'''
+    n_gpus: int | None = None
+    '''product of vllm parallelisms, applies if using vllm'''
     replicas: int = 1
     '''number of replicas to create'''
     replicas_per_vllm_server: int = 1
@@ -83,6 +87,7 @@ class LMConfig(BaseModel):
             self.out_model = getattr(sys.modules[__name__], self.out_model)
         if self.system_template_path:
             self.system_template = pth(self.system_template_path).read_text()
+        self.n_gpus = None if not (self.tp_size or self.pp_size) else (self.tp_size or 1) * (self.pp_size or 1)
     
 class Stage(BaseModel):
     '''

@@ -49,46 +49,52 @@ def _format_one_input(args) -> 'ChatType':
         )
         return [{'role': 'system', 'content': ''}]
 
-    # converts the source col into a message in openai format (does downsampling and base64 encoding as well)
-    messages.append(
-        utils.source_to_msg(
-            input['source'], 
-            max_dims, 
-            msg_content_img_func, 
-            path_substitution,
+    try:
+        # converts the source col into a message in openai format (does downsampling and base64 encoding as well)
+        messages.append(
+            utils.source_to_msg(
+                input['source'], 
+                max_dims, 
+                msg_content_img_func, 
+                path_substitution,
+                'pdf2image',
+            )
         )
-    )
-    
-    # 1. I allow prefixes for the lm_input_cols, so that you can say: 'description: {description_col}' or whatever
-    # 2. This code simply converts lm_input_cols into messages and adds the prefix
-    # also make this one user section because some models complain when roles don't alternate
-    prefixes_content = []
-    if len(lm_input_col_prefixes) == 0:
-        lm_input_col_prefixes = [''] * len(lm_input_cols)
-    for col, prefix in zip(lm_input_cols, lm_input_col_prefixes):
-        message = utils.source_to_msg(
-            input[col], 
-            max_dims, 
-            msg_content_img_func, 
-            path_substitution,
-        )
-        if isinstance(message['content'], str):
-            prefixes_content.append({'type': 'text', 'text': prefix + message['content'] + '\n'})
+        
+        # 1. I allow prefixes for the lm_input_cols, so that you can say: 'description: {description_col}' or whatever
+        # 2. This code simply converts lm_input_cols into messages and adds the prefix
+        # also make this one user section because some models complain when roles don't alternate
+        prefixes_content = []
+        if len(lm_input_col_prefixes) == 0:
+            lm_input_col_prefixes = [''] * len(lm_input_cols)
+        for col, prefix in zip(lm_input_cols, lm_input_col_prefixes):
+            message = utils.source_to_msg(
+                input[col], 
+                max_dims, 
+                msg_content_img_func, 
+                path_substitution,
+                'pdf2image',
+            )
+            if isinstance(message['content'], str):
+                prefixes_content.append({'type': 'text', 'text': prefix + message['content'] + '\n'})
+            else:
+                prefixes_content.append({'type': 'text', 'text': prefix})
+                prefixes_content.extend(message['content'])
+
+        if len(prefixes_content) == 0:
+            return messages
+
+        if isinstance(messages[-1]['content'], list):
+            messages[-1]['content'].extend(prefixes_content)
+        elif isinstance(messages[-1]['content'], str):
+            messages[-1]['content'] = [{'type': 'text', 'text': messages[-1]['content']}, *prefixes_content]
         else:
-            prefixes_content.append({'type': 'text', 'text': prefix})
-            prefixes_content.extend(message['content'])
+            raise ValueError(f"Invalid content type: {type(messages[-1]['content'])}")
 
-    if len(prefixes_content) == 0:
         return messages
-
-    if isinstance(messages[-1]['content'], list):
-        messages[-1]['content'].extend(prefixes_content)
-    elif isinstance(messages[-1]['content'], str):
-        messages[-1]['content'] = [{'type': 'text', 'text': messages[-1]['content']}, *prefixes_content]
-    else:
-        raise ValueError(f"Invalid content type: {type(messages[-1]['content'])}")
-
-    return messages
+    except Exception as e:
+        logger.warning(f"Error converting source to message, skipping generation for this sample:\n{e}\n{input}")
+        return [{'role': 'system', 'content': ''}]
 
 class VLM:
     stage: Stage = Field(default_factory=Stage, exclude=True)
@@ -150,10 +156,18 @@ class VLM:
         try:
             return list(self._executor.map(_format_one_input, tasks))
         except Exception as e:  # try to restart the pool and continue
-            self._executor.shutdown(wait=False)
-            del self._executor
-            self._executor = ProcessPoolExecutor(max_workers=min(max(4, cpu_count()), 32))
-            return list(self._executor.map(_format_one_input, tasks))
+            try:
+                self._executor.shutdown(wait=False)
+                del self._executor
+                self._executor = ProcessPoolExecutor(max_workers=min(max(4, cpu_count()), 32))
+                return list(self._executor.map(_format_one_input, tasks))
+            except Exception as e:
+                # common cause of it happening reproducibly is pdfium segfaulting so just move on
+                self._vlm_logger.error(f"Error despite restarting executor: {e}")
+                self._executor.shutdown(wait=False)
+                del self._executor
+                self._executor = ProcessPoolExecutor(max_workers=min(max(4, cpu_count()), 32))
+                return [{'role': 'system', 'content': ''}] * len(tasks)
 
     def load(self):
         self.prompt_sampler = PromptSampler(self.lm_config.prompt_sampler_config, self.lm_config.system_template)
@@ -227,7 +241,7 @@ def lm_cache(agenerate: Callable) -> Callable:
         
         if should_read_cache:
             cached_response = lm_cache_db.get(cache_params)
-            if cached_response is not None:
+            if cached_response is not None and any(g is not None for g in cached_response['generations']):
                 self._logger.debug(f"🔍 Cache hit for LM {self.lm_config.path}")
                 cached_response['cache_hit'] = [True] * len(cached_response['generations'])
                 return cached_response
@@ -388,35 +402,51 @@ class OpenAILM(OpenAILLM, CudaDevicePlacementMixin, VLLMServerPlacementMixin, VL
                 base_url = os.environ.get('VLLM_API_BASE_URL', 'http://localhost:8000')
                 self.base_url = f'{base_url}/v1'
 
+        # Initialize clients and prompt sampler
         super().load()
         VLM.load(self)
-        self.disable_cuda_device_placement = not self.lm_config.tp_size
-        CudaDevicePlacementMixin.load(self)
-        
-        # must come after CUDA_VISIBLE_DEVICES is set properly
+
+        # CUDA placement depends on server ownership for vLLM
+        self.disable_cuda_device_placement = not (self.lm_config.tp_size or self.lm_config.pp_size)
+
         if self.use_vllm and not self.use_running_vllm:
-            gpu = int(os.environ.get('CUDA_VISIBLE_DEVICES', '0').split(',')[0])
-            self._vllm_api.gpu = gpu
-            
-            # Check if we should share an existing vLLM server or start a new one
+            # Perform ownership election BEFORE assigning GPUs
             self.disable_vllm_server_sharing = self.lm_config.replicas_per_vllm_server <= 1
             self.replicas_per_vllm_server = self.lm_config.replicas_per_vllm_server
             self.model_path = self.lm_config.path
             VLLMServerSharingMixin.load(self)
-            
+
+            # Only the elected owner should request GPUs
+            if not self._server_info['is_owner']:
+                # non-owners should not request GPUs
+                try:
+                    self._desired_num_gpus = 0  # type: ignore[attr-defined]
+                except Exception:
+                    self.disable_cuda_device_placement = True
+
+            # Now assign CUDA devices accordingly
+            CudaDevicePlacementMixin.load(self)
+
             if self._server_info['is_owner']:
-                # This replica is responsible for starting the vLLM server
+                # Owner sets its GPU index and starts vLLM
+                gpu = int(os.environ.get('CUDA_VISIBLE_DEVICES', '0').split(',')[0])
+                self._vllm_api.gpu = gpu
                 self._vllm_api.start_vllm()
-                # Update the sharing map with the actual port and PID
                 VLLMServerSharingMixin.update_server_info(
                     self, self._vllm_api.port, self._vllm_api.vllm_server_pid
                 )
-            else:
-                # This replica joins an existing vLLM server
-                self._vllm_api.wait_for_existing_server(
-                    self._server_info['port'], self._server_info['pid']
-                )
                 self.base_url = f'http://localhost:{self._vllm_api.port}/v1'
+            else:
+                # Join existing server; no GPUs needed
+                ready_port = self._server_info['port']
+                ready_pid = self._server_info['pid']
+                self._vllm_api.gpu = self._replica_id
+                self._vllm_api.wait_for_existing_server(ready_port, ready_pid)
+                self.base_url = f'http://localhost:{self._vllm_api.port}/v1'
+        else:
+            # Non-vLLM or running vLLM, do CUDA placement as before
+            CudaDevicePlacementMixin.load(self)
+
         self._aclient.base_url = self._aclient._enforce_trailing_slash(URL(self.base_url))
 
     def _assign_cuda_devices(self):
@@ -462,6 +492,7 @@ class OpenAILM(OpenAILLM, CudaDevicePlacementMixin, VLLMServerPlacementMixin, VL
                 max_completion_tokens=max_new_tokens,
                 temperature=temperature,
                 extra_body=extra_body,
+                timeout=600,
             )
             return completion
         

@@ -86,7 +86,7 @@ def run_pipeline(config: Config):
                 input_formatter=lm.format_input,
                 parallel_input_formatter=lm.parallel_format_inputs,
                 input_batch_size=BATCH_SIZE,
-                resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.tp_size, oversubscribe=lm.lm_config.replicas_per_vllm_server),
+                resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.n_gpus, oversubscribe=lm.lm_config.replicas_per_vllm_server),
                 output_mappings={'system': 'question_system', 'model_name': 'question_model_name', 'analysis': 'question_analysis'},
                 **lm.lm_config.task_kwargs,
             ) 
@@ -144,7 +144,7 @@ def run_pipeline(config: Config):
                 input_formatter=lm.format_input,
                 parallel_input_formatter=lm.parallel_format_inputs,
                 input_batch_size=BATCH_SIZE,
-                resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.tp_size, oversubscribe=lm.lm_config.replicas_per_vllm_server),
+                resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.n_gpus, oversubscribe=lm.lm_config.replicas_per_vllm_server),
                 extra_cols=['answer', 'page_source'],
                 input_mappings={'source': 'question'},  # don't want the pages as context, just question
                 output_mappings={
@@ -178,7 +178,7 @@ def run_pipeline(config: Config):
                 parallel_input_formatter=lm.parallel_format_inputs,
                 lm_input_cols=['question'],
                 input_batch_size=BATCH_SIZE,
-                resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.tp_size, oversubscribe=lm.lm_config.replicas_per_vllm_server),
+                resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.n_gpus, oversubscribe=lm.lm_config.replicas_per_vllm_server),
                 output_mappings={'system': 'sp_answer_system', 'model_name': 'sp_answer_model_name', 'generation': 'sp_answer'},
                 **lm.lm_config.task_kwargs,
             )
@@ -224,7 +224,7 @@ def run_pipeline(config: Config):
                 lm_input_cols=['question_requirements', 'sp_answer'],
                 lm_input_col_prefixes=['question requirements: ', 'answer: '],
                 input_batch_size=BATCH_SIZE,
-                resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.tp_size, oversubscribe=lm.lm_config.replicas_per_vllm_server),
+                resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.n_gpus, oversubscribe=lm.lm_config.replicas_per_vllm_server),
                 extra_cols=['page_source'],
                 input_mappings={'source': 'question'},  # don't want the pages as context
                 output_mappings={
@@ -281,7 +281,7 @@ def run_pipeline(config: Config):
                 parallel_input_formatter=lm.parallel_format_inputs,
                 lm_input_cols=['question'],
                 input_batch_size=BATCH_SIZE,
-                resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.tp_size, oversubscribe=lm.lm_config.replicas_per_vllm_server),
+                resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.n_gpus, oversubscribe=lm.lm_config.replicas_per_vllm_server),
                 output_mappings={'system': 'answer_system', 'model_name': 'answer_model_name', 'generation': 'answer'},
                 **lm.lm_config.task_kwargs,
             )

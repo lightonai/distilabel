@@ -71,7 +71,7 @@ def run_pipeline(config: Config) -> Dataset:
 				input_formatter=lm.format_input,
 				parallel_input_formatter=lm.parallel_format_inputs,
 				input_batch_size=BATCH_SIZE,
-				resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.tp_size, oversubscribe=lm.lm_config.replicas_per_vllm_server),
+				resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.n_gpus, oversubscribe=lm.lm_config.replicas_per_vllm_server),
 				**lm.lm_config.task_kwargs,
 			)
 			for i, lm in enumerate(lms)
@@ -121,7 +121,7 @@ def run_pipeline(config: Config) -> Dataset:
 				lm_input_cols=['scenarios_text'],
 				lm_input_col_prefixes=['scenarios: '],
 				input_batch_size=BATCH_SIZE,
-				resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.tp_size, oversubscribe=lm.lm_config.replicas_per_vllm_server),
+				resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.n_gpus, oversubscribe=lm.lm_config.replicas_per_vllm_server),
 				**lm.lm_config.task_kwargs,
 			)
 			for i, lm in enumerate(lms)
@@ -161,7 +161,7 @@ def run_pipeline(config: Config) -> Dataset:
 				lm_input_cols=['persona_json'],
 				lm_input_col_prefixes=['persona: '],
 				input_batch_size=BATCH_SIZE,
-				resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.tp_size, oversubscribe=lm.lm_config.replicas_per_vllm_server),
+				resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.n_gpus, oversubscribe=lm.lm_config.replicas_per_vllm_server),
 				**lm.lm_config.task_kwargs,
 			)
 			for i, lm in enumerate(lms)
@@ -201,7 +201,7 @@ def run_pipeline(config: Config) -> Dataset:
 				lm_input_cols=['persona_json', 'abstraction_moves_text', 'rewrite_guidance'],
 				lm_input_col_prefixes=['persona: ', 'abstraction_moves: ', 'rewrite_guidance: '],
 				input_batch_size=BATCH_SIZE,
-				resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.tp_size, oversubscribe=lm.lm_config.replicas_per_vllm_server),
+				resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.n_gpus, oversubscribe=lm.lm_config.replicas_per_vllm_server),
 				output_mappings={'generation': 'persona'},
 				**lm.lm_config.task_kwargs,
 			)

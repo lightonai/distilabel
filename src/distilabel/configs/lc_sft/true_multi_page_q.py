@@ -86,6 +86,7 @@ def judge_answers_lm_config(
             'max-model-len': '32768',
             'gpu-memory-utilization': 0.9,
             'quantization': 'fp8',
+            'max-num-seqs': '64',
         },
         out_model='SatisfactoryAnswer',
         system_template_path='distilabel/prompts/satisfied_user.txt',
@@ -161,7 +162,7 @@ stages = [
                 replicas_per_vllm_server=2,
                 vllm_kwargs={
                     'max-model-len': '32768',
-                    'gpu-memory-utilization': 0.95,
+                    'gpu-memory-utilization': 0.9,
                     'quantization': 'fp8',
                 },
                 out_model='QuestionRequirements',

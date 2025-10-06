@@ -93,6 +93,7 @@ def load_from_filename(
     filename: str, 
     crop: dict[str, int] | None = None,
     path_substitution: tuple[str, str] | None = None,
+    pdf_backend: str = "pdfium",
 ):
     """
     Loads an image based on a filename which includes the page as shown below
@@ -115,7 +116,7 @@ def load_from_filename(
     elif filename.with_suffix('.png').exists():
         image = Image.open(filename.with_suffix('.png'))
     elif filename.suffix == '.pdf':
-        image = load_from_pdf(filename)
+        image = load_from_pdf(filename, pdf_backend)
     else:
         raise NotImplementedError(f'suffix for {filename=} is not supported')
     
@@ -133,6 +134,7 @@ def get_image(
     ds: Dataset | None, 
     image_ptr: str | int,
     path_substitution: tuple[str, str] | None = None,
+    pdf_backend: str = "pdfium",
 ):
     '''
     This will load an image as a PIL Image from your dataset or a pdf or a jpg outside the dataset
@@ -163,12 +165,14 @@ def get_image(
             return load_from_filename(
                 image_ptr, 
                 path_substitution=path_substitution,
+                pdf_backend=pdf_backend,
             )
         elif isinstance(image_ptr, int) and ds[image_ptr]["image"] is None:
             return load_from_filename(
                 ds[image_ptr]["image_filename"], 
                 crop=ds[image_ptr].get('crop'), 
                 path_substitution=path_substitution,
+                pdf_backend=pdf_backend,
             )
         else:
             return ds[image_ptr]["image"]

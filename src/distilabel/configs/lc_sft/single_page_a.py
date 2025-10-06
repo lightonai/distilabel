@@ -41,10 +41,14 @@ def answer_lm_config(
         replicas_per_vllm_server=gpu_mesh[2],
         vllm_kwargs={
             'limit-mm-per-prompt': "'{\"image\": 1}'",
-            'max-model-len': '32768',
+            'max-model-len': '16384',
             'gpu-memory-utilization': 0.95,
-            'quantization': 'fp8',
-        },
+        } | ({'quantization': 'fp8'} if 'FP8-Dynamic' not in path else {
+            'max-num-batched-tokens': '4096',
+            'max-num-seqs': '16',
+            'enable-expert-parallel': None,
+            'mm-processor-cache-gb': '0',
+        }),
         out_model=None,
         system_template_path='distilabel/prompts/rag_focused_answer.txt',
         prompt_sampler_config=answer_prompt_sampler_config,
@@ -52,12 +56,12 @@ def answer_lm_config(
 
 stages = [
     Stage(
-        lm_configs=[ # 72b, gemini flash, gpt 5 mini, RedHatAI/Qwen3-VL-235B-A22B-Instruct-FP8-block
+        lm_configs=[ # 72b, gemini flash, gpt 5 mini, RedHatAI/Qwen3-VL-235B-A22B-Instruct-FP8-Dynamic
             answer_lm_config('gemini-2.5-flash', data_ratio=0.5, gpu_mesh=(1, None, 1)),
             answer_lm_config('gemini-2.5-flash-lite', data_ratio=1.0, gpu_mesh=(1, None, 1)),
             # answer_lm_config('gpt-5-mini', data_ratio=0.1, gpu_mesh=(1, None)),
             # answer_lm_config('gpt-5-nano', data_ratio=1.0, gpu_mesh=(1, None)),
-            answer_lm_config('RedHatAI/Qwen3-VL-235B-A22B-Instruct-FP8-block', data_ratio=2.0, gpu_mesh=(2, 4, 2)),
+            answer_lm_config('RedHatAI/Qwen3-VL-235B-A22B-Instruct-FP8-Dynamic', data_ratio=2.0, gpu_mesh=(2, 4, 2)),
             # answer_lm_config('Qwen/Qwen2.5-VL-32B-Instruct', data_ratio=2.0, gpu_mesh=(2, 1, 2)),
         ],
         available_gpus=AVAILABLE_GPUS,

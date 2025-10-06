@@ -30,9 +30,21 @@ class vLLMAPI:
         os.makedirs('vllm_logs', exist_ok=True)
 
     def port_in_use(self, port: int) -> bool:
-        '''Check if a port is in use.'''
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            return s.connect_ex(('localhost', port)) == 0
+        '''Check if a port is unavailable for exclusive bind on localhost.'''
+        test_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            test_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            test_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+            test_socket.bind(("127.0.0.1", port))
+            # No listen; close immediately so the port is released.
+            return False
+        except OSError:
+            return True
+        finally:
+            try:
+                test_socket.close()
+            except Exception:
+                pass
 
     def random_available_port(self) -> int:
         '''Get a random available port.'''
@@ -41,7 +53,7 @@ class vLLMAPI:
             if not self.port_in_use(port):
                 return port
 
-    def start_vllm(self, timeout=600):
+    def start_vllm(self, timeout=900):
         '''Start the asynchronous vLLM server.'''
         # ensure model is downloaded before launching vllm
         from huggingface_hub import snapshot_download
@@ -55,14 +67,17 @@ class vLLMAPI:
             "--trust-remote-code",
             "--port", str(self.port),
         ]
+        if self.lm_config.pp_size:
+            launch_vllm.extend(["--pipeline-parallel-size", str(self.lm_config.pp_size)])
 
         # Add any extra vllm_args from the config
         for k, v in getattr(self.lm_config, "vllm_kwargs", {}).items():
             flag = f"--{k.replace('_', '-')}"
             launch_vllm.append(flag) if v is None else launch_vllm.extend([flag, str(v)])
 
+        os.makedirs(f"vllm_logs/{self.lm_config.path.replace('/', '-')}", exist_ok=True)
         launch_vllm.extend([
-            ">", f"vllm_logs/{self.gpu}.txt",
+            ">", f"vllm_logs/{self.lm_config.path.replace('/', '-')}/{self.gpu}.txt",
             "2>&1",
             "&",
             "echo", "$!",  # retrieve the PID of the actual vllm server
@@ -114,13 +129,13 @@ class vLLMAPI:
         self.port = port
         self.vllm_server_pid = pid
         
-        _logger.info(f'[{self.gpu}] Waiting for existing vLLM Server on port {port}...')
+        _logger.info(f'replica-id [{self.gpu}] Waiting for existing vLLM Server on port {port}...')
         
         t0 = time.perf_counter()
         while time.perf_counter() - t0 < timeout:
             try:
                 self.establish_client_vllm()
-                _logger.info(f'[{self.gpu}] Connected to existing vLLM Server')
+                _logger.info(f'replica-id [{self.gpu}] Connected to existing vLLM Server')
                 return
             except openai.APIConnectionError:
                 time.sleep(5)
@@ -144,10 +159,10 @@ class vLLMAPI:
         if is_process_running(pid):
             try:
                 os.kill(pid, signal.SIGTERM)
-                _logger.info(f'[{self.gpu}] Server with PID {pid} has been sent SIGTERM.')
+                _logger.info(f'Server with PID {pid} has been sent SIGTERM.')
                 time.sleep(10)  # Allow time for cleanup
                 if is_process_running(pid):
                     os.kill(pid, signal.SIGKILL)
-                    _logger.info(f'[{self.gpu}] Server with PID {pid} has been killed.')
+                    _logger.info(f'Server with PID {pid} has been killed.')
             except ProcessLookupError:
-                _logger.warning(f'[{self.gpu}] Server with PID {pid} does not exist.')
+                _logger.warning(f'Server with PID {pid} does not exist.')

@@ -395,6 +395,7 @@ def source_to_msg(
     max_dims: tuple[int, int], 
     msg_content_img: Callable,
     path_substitution: tuple[str, str] | None = None,
+    pdf_backend: str = "pdfium",
 ) -> dict:
     '''
     Convert a source into an openai message.
@@ -409,7 +410,7 @@ def source_to_msg(
         content = []
         for item in source:
             if isinstance(item, str):
-                img = get_image(None, item, path_substitution)
+                img = get_image(None, item, path_substitution, pdf_backend)
             elif isinstance(item, Image.Image):
                 img = item
             else:

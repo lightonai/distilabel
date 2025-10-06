@@ -86,7 +86,7 @@ def multi_branch_data_router(
     
     return router
 
-def make_lms(config: Config, stage: Stage, use_cache: bool = False, invalidate_cache: bool = False) -> list[OpenAILM]:
+def make_lms(config: Config, stage: Stage, use_cache: bool = False, invalidate_cache: bool | list[bool] = False) -> list[OpenAILM]:
     '''initialize lms for a stage'''
     return [
         OpenAILM(
@@ -99,8 +99,8 @@ def make_lms(config: Config, stage: Stage, use_cache: bool = False, invalidate_c
             },
             use_running_vllm=config.use_running_vllm,
             use_cache=use_cache,
-            invalidate_cache=invalidate_cache,
+            invalidate_cache=invalidate_cache[i] if isinstance(invalidate_cache, list) else invalidate_cache,
             replicas_per_vllm_server=lm_config.replicas_per_vllm_server,
         ) 
-        for lm_config in stage.lm_configs
+        for i, lm_config in enumerate(stage.lm_configs)
     ]

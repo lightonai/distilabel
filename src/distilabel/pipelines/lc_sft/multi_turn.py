@@ -140,7 +140,7 @@ def _lm_generation_task(
         lm_input_col_prefixes=lm_input_col_prefixes,
         extra_cols=extra_cols,
         input_batch_size=BATCH_SIZE,
-        resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.tp_size, oversubscribe=lm.lm_config.replicas_per_vllm_server),
+        resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.n_gpus, oversubscribe=lm.lm_config.replicas_per_vllm_server),
         output_mappings=output_mappings,
         input_mappings=input_mappings,
         **lm.lm_config.task_kwargs,
@@ -725,6 +725,7 @@ if __name__ == "__main__":
 
     distiset_n_images = sum(distiset['n_images'])
 
+    # for synthetic cot or reasoning model, control token in system should always use think and otherwise be per-prompt
     synthetic_cot_ds = load_from_disk(CACHE_DIR / 'synthetic_cot_for_multi_turn_vds')
     mp_short_hn_ds = load_from_disk(CACHE_DIR / 'true_multi_page_short_hn_for_multi_turn_vds')
     mp_short_doc_ds = load_from_disk(CACHE_DIR / 'true_multi_page_short_doc_for_multi_turn_vds')

@@ -34,7 +34,7 @@ from distilabel.configs.lc_sft.synthetic_cot import (
 )
 
 STAGE = 0
-BATCH_SIZE = 128
+BATCH_SIZE = 256
 
 
 def _some_relevant(row: dict, cols: list[str]) -> bool:
@@ -110,7 +110,7 @@ def run_pipeline(config: Config, dataset: Dataset):
                 lm_input_cols=['question'],
                 lm_input_col_prefixes=['Given question: '],
                 input_batch_size=BATCH_SIZE,
-                resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.tp_size, oversubscribe=lm.lm_config.replicas_per_vllm_server),
+                resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.n_gpus, oversubscribe=lm.lm_config.replicas_per_vllm_server),
                 output_mappings={'system': 'evidence_system', 'model_name': 'evidence_model_name'},
                 **lm.lm_config.task_kwargs,
             )
@@ -118,6 +118,7 @@ def run_pipeline(config: Config, dataset: Dataset):
         ]  # cols: ['source', 'question', ...] -> ['evidence', 'relevant', 'evidence_system', 'evidence_model_name', ...]
 
         filter_evidence = FilterRows(
+            # use_cache=True,
             name='filter_evidence',
             cols=['evidence'],
             condition=utils.generation_is_structured,
@@ -126,6 +127,7 @@ def run_pipeline(config: Config, dataset: Dataset):
 
         # Rejoin all chunks for each row (global step), restoring original source
         rejoin_chunks = Rejoin(
+            # use_cache=True,
             name='rejoin_chunks',
             input_col='source',
             duplicates_cols=[
@@ -143,6 +145,7 @@ def run_pipeline(config: Config, dataset: Dataset):
 
         # Combine evidence text from chunks
         combine_evidence = Map(
+            # use_cache=True,
             name='combine_evidence',
             fn=_combine_evidence,
             cols=['evidence', 'relevant', 'source'],
@@ -152,6 +155,7 @@ def run_pipeline(config: Config, dataset: Dataset):
         )  # cols: ['source', 'evidence', 'relevant'] -> ['page_source', 'combined_evidence']
 
         filter_relevant = FilterRows(
+            # use_cache=True,
             name='filter_relevant',
             cols=['relevant'],
             condition=utils.logical_and_filters(_some_relevant, utils.generation_is_structured),
@@ -184,6 +188,7 @@ def run_pipeline(config: Config, dataset: Dataset):
         # text context because the images will help ground the models and the models selected for this branch
         # should be strong enough to use the context effectively
         set_lc_mm_source = Map(
+            # use_cache=True,
             name='set_lc_mm_source',
             fn=partial(_set_lc_mm_source, K=TOP_K_PAGES),
             cols=['relevance_score', 'page_source'],
@@ -207,7 +212,7 @@ def run_pipeline(config: Config, dataset: Dataset):
                 lm_input_cols=['combined_evidence', 'question'],
                 lm_input_col_prefixes=['Per-page relevant context and your current chain of thought (feel free to correct your previous mistakes): ', ''],
                 input_batch_size=BATCH_SIZE,
-                resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.tp_size, oversubscribe=lm.lm_config.replicas_per_vllm_server),
+                resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.n_gpus, oversubscribe=lm.lm_config.replicas_per_vllm_server),
                 extra_cols=['combined_evidence'],
                 output_mappings={
                     'generation': 'answer',
@@ -224,6 +229,8 @@ def run_pipeline(config: Config, dataset: Dataset):
 
         # For text-only branch, prepare inputs for stage 1: preserve original pages as page_source and set combined evidence as source
         set_evidence_as_source = NoOp(
+            # use_cache=True,
+            # invalidate_cache=True,
             name='set_evidence_as_source',
             cols=['source', 'combined_evidence'],
             output_mappings={'combined_evidence': 'source'},
@@ -236,7 +243,7 @@ def run_pipeline(config: Config, dataset: Dataset):
         generate_answers_text_only = [
             LMGenerationTask(
                 use_cache=True,
-                # invalidate_cache=True,
+                invalidate_cache=True,
                 name=f'answer_generation_text_only_{i}',
                 stage=stage1,
                 llm=lm,
@@ -245,7 +252,7 @@ def run_pipeline(config: Config, dataset: Dataset):
                 parallel_input_formatter=lm.parallel_format_inputs,
                 lm_input_cols=['question'],
                 input_batch_size=BATCH_SIZE,
-                resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.tp_size, oversubscribe=lm.lm_config.replicas_per_vllm_server),
+                resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.n_gpus, oversubscribe=lm.lm_config.replicas_per_vllm_server),
                 output_mappings={
                     'system': 'answer_system', 
                     'model_name': 'answer_model_name', 
@@ -259,6 +266,7 @@ def run_pipeline(config: Config, dataset: Dataset):
         end_text_only_branch = NoOp(name='end_text_only_branch', input_batch_size=BATCH_SIZE)
 
         join_mm_and_text_only = ConcatenateBranches(
+            # use_cache=True,
             name='join_mm_and_text_only',
             col_factories={'top_k_pages': list},
             output_mappings={'source': 'drop'},
@@ -267,6 +275,7 @@ def run_pipeline(config: Config, dataset: Dataset):
 
         # Restore original set of pages (e.g. the full document) as source for output
         restore_pages = NoOp(
+            # use_cache=True,
             name='restore_pages',
             cols=['page_source'],
             output_mappings={'page_source': 'source'},
@@ -274,6 +283,7 @@ def run_pipeline(config: Config, dataset: Dataset):
         )  # cols: ['page_source'] -> ['source']
 
         filter_answers = FilterRows(
+            # use_cache=True,
             name='filter_answers',
             cols=['answer'],
             condition=utils.generation_is_structured,  # will simply check not None

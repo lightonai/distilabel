@@ -29,18 +29,12 @@ from distilabel.configs.lc_sft.full_context_one_shot_a import (
 )
 
 STAGE = 0
-BATCH_SIZE = 16
+BATCH_SIZE = 256
 
 
 def _combine_transcriptions(md: list[str], **kwargs) -> dict:
     md = [f'Page {i}:\n{t.strip()}' for i, t in enumerate(md)]
     return {'combined_md': '\n\n'.join(md)}
-
-def _extract_qwen_reasoning(answer: str, **kwargs) -> dict:
-    content = answer.split('</think>')
-    return (
-        {'reasoning': content[0].strip(), 'answer': content[1].strip()}
-    ) if len(content) == 2 else {'answer': answer.strip()}
 
 def run_pipeline(config: Config, dataset: Dataset, pipeline_name: str):
     global STAGE, BATCH_SIZE
@@ -62,7 +56,6 @@ def run_pipeline(config: Config, dataset: Dataset, pipeline_name: str):
             input_col='source',
             chunk_size=1,
             input_batch_size=BATCH_SIZE,
-            resources=StepResources(replicas=1),
         )
 
         evidence_router = pipe_utils.data_router(
@@ -80,7 +73,7 @@ def run_pipeline(config: Config, dataset: Dataset, pipeline_name: str):
                 input_formatter=lm.format_input,
                 parallel_input_formatter=lm.parallel_format_inputs,
                 input_batch_size=BATCH_SIZE,
-                resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.tp_size, oversubscribe=lm.lm_config.replicas_per_vllm_server),
+                resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.n_gpus, oversubscribe=lm.lm_config.replicas_per_vllm_server),
                 output_mappings={'generation': 'md', 'system': 'transcribe_system', 'model_name': 'transcribe_model_name'},
                 **lm.lm_config.task_kwargs,
             )
@@ -126,14 +119,14 @@ def run_pipeline(config: Config, dataset: Dataset, pipeline_name: str):
 
         answer_router = pipe_utils.data_router(
             step_distribution=[lm_config.data_ratio for lm_config in stage1.lm_configs],
-            invalidate_cache=True,
+            # invalidate_cache=True,
         )
 
         lms1 = pipe_utils.make_lms(config, stage1, use_cache=True)
         generate_answers = [
             LMGenerationTask(
                 use_cache=True,
-                invalidate_cache=True,
+                # invalidate_cache=True,
                 name=f'answer_generation_{i}',
                 stage=stage1,
                 llm=lm,
@@ -142,7 +135,7 @@ def run_pipeline(config: Config, dataset: Dataset, pipeline_name: str):
                 parallel_input_formatter=lm.parallel_format_inputs,
                 lm_input_cols=['question'],
                 input_batch_size=BATCH_SIZE,
-                resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.tp_size, oversubscribe=lm.lm_config.replicas_per_vllm_server),
+                resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.n_gpus, oversubscribe=lm.lm_config.replicas_per_vllm_server),
                 output_mappings={
                     'system': 'answer_system', 
                     'model_name': 'answer_model_name', 
@@ -169,17 +162,10 @@ def run_pipeline(config: Config, dataset: Dataset, pipeline_name: str):
             input_batch_size=BATCH_SIZE,
         )
 
-        extract_qwen_reasoning = Map(
-            name='extract_qwen_reasoning',
-            fn=_extract_qwen_reasoning,
-            cols=['answer'],
-            output_cols=['reasoning', 'answer'],
-        )
-
         # ---------------------- Pipeline ----------------------
         (
             load_data >> split_chunks >> evidence_router >> transcribe_pages >> filter_transcriptions >> rejoin_chunks >> combine_transcriptions 
-            >> set_md_as_source >> answer_router >> generate_answers >> restore_pages >> filter_answers >> extract_qwen_reasoning
+            >> set_md_as_source >> answer_router >> generate_answers >> restore_pages >> filter_answers
         )
 
     distiset, cost_tracker = pipeline.run(
@@ -190,7 +176,7 @@ def run_pipeline(config: Config, dataset: Dataset, pipeline_name: str):
             )
             + [[rejoin_chunks.name]]  # global step on its own
             + pipe_utils.steps_to_load_groups(
-                [combine_transcriptions, set_md_as_source, *generate_answers, restore_pages, filter_answers, extract_qwen_reasoning],
+                [combine_transcriptions, set_md_as_source, *generate_answers, restore_pages, filter_answers],
                 len(config.stages[1].available_gpus),
             )
         ),

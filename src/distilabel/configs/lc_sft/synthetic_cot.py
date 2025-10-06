@@ -19,7 +19,7 @@ MP_DS_PATH = Path('/mnt/nfs/austin_shared/mp_data_gen/distilabel/out/lc_sft/true
 IMAGES_DS_PATH = Path('/mnt/nfs/austin_shared/data/all_pdfs_images_ds')
 PDF_ROOT = Path('/mnt/nfs/pdfs')
 CACHE_DIR = Path('/mnt/nfs/austin_shared/mp_data_gen/distilabel/out/lc_sft')
-AVAILABLE_GPUS = [0, 1, 2, 3]
+AVAILABLE_GPUS = [0, 1, 2, 3, 4, 5, 6, 7]
 PATH_SUBSTITUTION = ('/lustre/fsn1/projects/rech/eya/uzj46do/pdfs/', '/mnt/nfs/pdfs/')
 
 TOP_K_PAGES = 8
@@ -42,7 +42,7 @@ text_only_prompt_sampler_config = PromptSamplerConfig(
 def lc_mm_overall_answer_lm_config(
     path: str, 
     data_ratio: float = 1.0, 
-    gpu_mesh: tuple[int | None, int | None] = (1, 1)
+    gpu_mesh: tuple[int | None, int | None, int | None] = (1, 1, 1),
 ):
     temperature = 0.7
     if 'gpt-5' in path:
@@ -53,14 +53,19 @@ def lc_mm_overall_answer_lm_config(
         task_name='overall_answer_lc_mm',
         temperature=temperature,
         max_new_tokens=16384,
-        tp_size=gpu_mesh[1],
         replicas=gpu_mesh[0],
+        tp_size=gpu_mesh[1],
+        replicas_per_vllm_server=gpu_mesh[2],
         vllm_kwargs={
             'limit-mm-per-prompt': "'{\"image\": top_k}'".replace('top_k', str(TOP_K_PAGES)),
             'max-model-len': '240000',
-            'gpu-memory-utilization': 0.95,
-            'quantization': 'fp8',
-        },
+            'gpu-memory-utilization': 0.9,
+        } | ({'quantization': 'fp8'} if 'FP8-Dynamic' not in path else {
+            'max-num-batched-tokens': '8192',
+            'max-num-seqs': '64',
+            'enable-expert-parallel': None,
+            'mm-processor-cache-gb': '0',
+        }),
         out_model=None,
         system_template_path='distilabel/prompts/lc_sft/combine_evidence_chunks.txt',
         prompt_sampler_config=lc_mm_prompt_sampler_config,
@@ -76,13 +81,15 @@ stages = [
                 task_name='evidence_in_chunks',
                 temperature=0.7,
                 max_new_tokens=4096,
+                replicas=8,
                 tp_size=2,
-                replicas=2,
+                replicas_per_vllm_server=2,
                 vllm_kwargs={
                     'limit-mm-per-prompt': "'{\"image\": 1}'",
                     'max-model-len': '32768',
-                    'gpu-memory-utilization': 0.95,
+                    'gpu-memory-utilization': 0.9,
                     'quantization': 'fp8',
+                    'max-num-seqs': '64',
                 },
                 out_model='EvidenceInChunks',
                 system_template_path='distilabel/prompts/lc_sft/evidence_in_chunks.txt',
@@ -101,9 +108,9 @@ stages = [
             # LC MM models
             # lc_mm_overall_answer_lm_config('gpt-5-mini', data_ratio=0.1, gpu_mesh=(1, None)),
             # lc_mm_overall_answer_lm_config('gpt-5-nano', data_ratio=1.0, gpu_mesh=(1, None)),
-            lc_mm_overall_answer_lm_config('gemini-2.5-flash', data_ratio=0.5, gpu_mesh=(1, None)),
-            lc_mm_overall_answer_lm_config('gemini-2.5-flash-lite', data_ratio=0.5, gpu_mesh=(1, None)),
-            lc_mm_overall_answer_lm_config('RedHatAI/Qwen3-VL-235B-A22B-Instruct-FP8-block', data_ratio=1.0, gpu_mesh=(1, 4)),
+            lc_mm_overall_answer_lm_config('gemini-2.5-flash', data_ratio=0.5, gpu_mesh=(1, None, 1)),
+            lc_mm_overall_answer_lm_config('gemini-2.5-flash-lite', data_ratio=0.5, gpu_mesh=(1, None, 1)),
+            lc_mm_overall_answer_lm_config('RedHatAI/Qwen3-VL-235B-A22B-Instruct-FP8-Dynamic', data_ratio=1.0, gpu_mesh=(2, 8, 2)),
 
             # qwen 235 instruct
             # text only models
@@ -113,11 +120,14 @@ stages = [
                 task_name='overall_answer_text_only',
                 temperature=0.7,
                 max_new_tokens=16384,
-                tp_size=4,
-                replicas=1,
+                replicas=2,
+                tp_size=4,  # tp_size 8 not functional for this model
+                pp_size=2,
+                replicas_per_vllm_server=2,
                 vllm_kwargs={
-                    'gpu-memory-utilization': 0.95,
+                    'gpu-memory-utilization': 0.90,
                     'max-model-len': '240000',
+                    # 'max-num-seqs': '64',
                 },
                 out_model=None,
                 system_template_path='distilabel/prompts/lc_sft/combine_evidence_chunks.txt',

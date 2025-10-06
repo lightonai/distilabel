@@ -22,7 +22,7 @@ PIPELINE_NAME = 'true_multi_page_a_v0'
 def answer_lm_config(
     path: str, 
     data_ratio: float = 1.0, 
-    gpu_mesh: tuple[int | None, int | None] = (1, 1)
+    gpu_mesh: tuple[int | None, int | None, int | None] = (1, 1, 1),
 ):
     temperature = 0.7
     if 'gpt-5' in path:
@@ -33,14 +33,19 @@ def answer_lm_config(
         task_name='answer_generation',
         temperature=temperature,
         max_new_tokens=16384,
-        tp_size=gpu_mesh[1],
         replicas=gpu_mesh[0],
+        tp_size=gpu_mesh[1],
+        replicas_per_vllm_server=gpu_mesh[2],
         vllm_kwargs={
             'limit-mm-per-prompt': "'{\"image\": 10}'",
             'max-model-len': '32768',
-            'gpu-memory-utilization': 0.95,
-            'quantization': 'fp8',
-        },
+            'gpu-memory-utilization': 0.92,
+        } | ({'quantization': 'fp8'} if 'FP8-Dynamic' not in path else {
+            'max-num-batched-tokens': '4096',
+            'max-num-seqs': '8',
+            'enable-expert-parallel': None,
+            'mm-processor-cache-gb': '0',
+        }),
         out_model=None,
         system_template_path='distilabel/prompts/rag_focused_answer.txt',
         prompt_sampler_config=PromptSamplerConfig(),
@@ -49,11 +54,11 @@ def answer_lm_config(
 stages = [
     Stage(
         lm_configs=[ # gemini flash, gpt 5 mini, Qwen/Qwen3-VL-235B-A22B-Instruct-FP8
-            answer_lm_config('gemini-2.5-flash', data_ratio=0.5, gpu_mesh=(1, None)),
-            answer_lm_config('gemini-2.5-flash-lite', data_ratio=0.5, gpu_mesh=(1, None)),
+            answer_lm_config('gemini-2.5-flash', data_ratio=0.5, gpu_mesh=(1, None, 1)),
+            answer_lm_config('gemini-2.5-flash-lite', data_ratio=0.5, gpu_mesh=(1, None, 1)),
             # answer_lm_config('gpt-5-mini', data_ratio=0.1, gpu_mesh=(1, None)),
             # answer_lm_config('gpt-5-nano', data_ratio=1.0, gpu_mesh=(1, None)),
-            answer_lm_config('RedHatAI/Qwen3-VL-235B-A22B-Instruct-FP8-block', data_ratio=1.0, gpu_mesh=(1, 4)),
+            answer_lm_config('RedHatAI/Qwen3-VL-235B-A22B-Instruct-FP8-Dynamic', data_ratio=1.0, gpu_mesh=(2, 4, 2)),
         ],
         available_gpus=AVAILABLE_GPUS,
         max_dims=(1000, 1000),

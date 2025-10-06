@@ -90,7 +90,7 @@ PIPELINE_NAME = 'single_page_q_v0'
 def get_lm_config(
     path: str, 
     data_ratio: float = 1.0, 
-    gpu_mesh: tuple[int | None, int | None] = (1, 1),
+    gpu_mesh: tuple[int | None, int | None, int | None] = (1, 1, 1),
 ):
     temperature = 0.7
     if 'gpt-5' in path:
@@ -101,14 +101,15 @@ def get_lm_config(
         task_name='question_generation',
         temperature=temperature,
         max_new_tokens=16384,
-        tp_size=gpu_mesh[1],
         replicas=gpu_mesh[0],
+        tp_size=gpu_mesh[1],
+        replicas_per_vllm_server=gpu_mesh[2],
         vllm_kwargs={
             'limit-mm-per-prompt': "'{\"image\": 1}'",
             'quantization': 'fp8',
             'max-model-len': '32768',
-            'gpu-memory-utilization': 0.95,
-        },
+            'gpu-memory-utilization': 0.9,
+        } | ({'max-num-seqs': '64'} if '72B' in path else {}),
         out_model='SinglePageQuestions',
         system_template_path='distilabel/prompts/single_page_questions.txt',
         prompt_sampler_config=question_prompt_sampler_config,
@@ -117,11 +118,11 @@ def get_lm_config(
 stages = [
     Stage(
         lm_configs=[ # 72b, 32b, gpt-5-nano, gemini-2.5-flash-lite
-            get_lm_config('Qwen/Qwen2.5-VL-72B-Instruct', data_ratio=1.0, gpu_mesh=(1, 2)),
-            get_lm_config('Qwen/Qwen2.5-VL-32B-Instruct', data_ratio=1.0, gpu_mesh=(2, 1)),
+            get_lm_config('Qwen/Qwen2.5-VL-72B-Instruct', data_ratio=1.0, gpu_mesh=(2, 2, 2)),
+            get_lm_config('Qwen/Qwen2.5-VL-32B-Instruct', data_ratio=1.0, gpu_mesh=(4, 1, 2)),
             # get_lm_config('gpt-5-nano', data_ratio=0.5, gpu_mesh=(1, None)),
-            get_lm_config('gemini-2.5-flash-lite', data_ratio=1.0, gpu_mesh=(1, None)),
-            get_lm_config('gemini-2.5-flash', data_ratio=1.0, gpu_mesh=(1, None)),
+            get_lm_config('gemini-2.5-flash-lite', data_ratio=1.0, gpu_mesh=(1, None, 1)),
+            get_lm_config('gemini-2.5-flash', data_ratio=1.0, gpu_mesh=(1, None, 1)),
         ],
         available_gpus=AVAILABLE_GPUS,
         max_dims=(1000, 1000),
