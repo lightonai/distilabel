@@ -53,12 +53,8 @@ class vLLMAPI:
             if not self.port_in_use(port):
                 return port
 
-    def start_vllm(self, timeout=900):
+    def start_vllm(self, timeout=1500):
         '''Start the asynchronous vLLM server.'''
-        # ensure model is downloaded before launching vllm
-        from huggingface_hub import snapshot_download
-        snapshot_download(repo_id=self.lm_config.path)
-
         # Build the vllm serve command as a list for subprocess
         launch_vllm = [
             "vllm", "serve", self.lm_config.path,
@@ -77,7 +73,7 @@ class vLLMAPI:
 
         os.makedirs(f"vllm_logs/{self.lm_config.path.replace('/', '-')}", exist_ok=True)
         launch_vllm.extend([
-            ">", f"vllm_logs/{self.lm_config.path.replace('/', '-')}/{self.gpu}.txt",
+            ">", f"vllm_logs/{self.lm_config.path.replace('/', '-')}/{self.gpu}.log",
             "2>&1",
             "&",
             "echo", "$!",  # retrieve the PID of the actual vllm server
@@ -95,9 +91,18 @@ class vLLMAPI:
             stdout, stderr = process.communicate()
             self.vllm_server_pid = int(stdout.strip().decode('utf-8'))
 
+            err = (
+                f'vllm server process {self.vllm_server_pid} on port {self.port} failed to become ready; '
+                f'see vllm_logs/{self.lm_config.path.replace("/", "-")}/{self.gpu}.log'
+            )
+
             # wait patiently for vllm server to start
             t0 = time.perf_counter()
             while time.perf_counter() - t0 < timeout:
+                # Early exit if the vllm process crashes during startup wait
+                if not self._is_process_running(self.vllm_server_pid):
+                    self.cleanup()
+                    raise RuntimeError(err)
                 try:
                     self.establish_client_vllm()
                     _logger.info(f'[{self.gpu}] vLLM Server Initialized')
@@ -107,13 +112,20 @@ class vLLMAPI:
                     return
 
         self.cleanup()
-        err = f'vllm server failed to start within timeout {timeout}s'
         raise RuntimeError(err)
 
     def establish_client_vllm(self):
         '''Establish a openai client to the vLLM server.'''
         self.client = openai.OpenAI(api_key='empty', base_url=f'http://localhost:{self.port}/v1')
         self.model_name = self.client.models.list().data[0].id
+
+    def _is_process_running(self, pid: int) -> bool:
+        '''Return True if a process with the given PID is running.'''
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            return False
+        return True
 
     def wait_for_existing_server(self, port: int, pid: int, timeout=600):
         '''Wait for an existing vLLM server to be ready on the specified port.
@@ -130,17 +142,23 @@ class vLLMAPI:
         self.vllm_server_pid = pid
         
         _logger.info(f'replica-id [{self.gpu}] Waiting for existing vLLM Server on port {port}...')
+
+        err = (
+            f'vllm server process {self.vllm_server_pid} on port {self.port} failed to become ready; '
+            f'see vllm_logs/{self.lm_config.path.replace("/", "-")}/{self.gpu}.log'
+        )
         
         t0 = time.perf_counter()
         while time.perf_counter() - t0 < timeout:
+            # Early exit if the existing server process has exited
+            if not self._is_process_running(self.vllm_server_pid):
+                raise RuntimeError(err)
             try:
                 self.establish_client_vllm()
                 _logger.info(f'replica-id [{self.gpu}] Connected to existing vLLM Server')
                 return
             except openai.APIConnectionError:
                 time.sleep(5)
-        
-        err = f'vllm server on port {port} failed to become ready within timeout {timeout}s'
         raise RuntimeError(err)
 
     def cleanup(self):
@@ -148,20 +166,13 @@ class vLLMAPI:
         if not self.vllm_server_pid:
             return
 
-        def is_process_running(pid: int) -> bool:
-            try:
-                os.kill(pid, 0)
-            except OSError:
-                return False
-            return True
-
         pid = self.vllm_server_pid
-        if is_process_running(pid):
+        if self._is_process_running(pid):
             try:
                 os.kill(pid, signal.SIGTERM)
                 _logger.info(f'Server with PID {pid} has been sent SIGTERM.')
                 time.sleep(10)  # Allow time for cleanup
-                if is_process_running(pid):
+                if self._is_process_running(pid):
                     os.kill(pid, signal.SIGKILL)
                     _logger.info(f'Server with PID {pid} has been killed.')
             except ProcessLookupError:
