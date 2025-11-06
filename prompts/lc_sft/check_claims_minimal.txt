@@ -1,0 +1,10 @@
+Your goal is to determine if any information in the answer has been made up or contradicts the source. You are given the original question, the LM's answer, some extracted claims from the answer and the document. Determine if these claims contradict the document/evidence or are supported by it.
+
+Next, if there is at least one claim that is not supported, as MINIMALLY as possible, edit the answer to correct for this, aligning fully with the document and provide the full, corrected answer in 'corrected_answer'. (if no correction is needed, provide null).
+
+Here is the output format, provide nothing except this:
+{{
+    "analysis": str (a place to thoroughly analyze the claims and the pages/evidence, determining if each is correct. Explicitly reason about each claim),
+    "claims_supported": list[bool],
+    "corrected_answer": str | null,
+}}

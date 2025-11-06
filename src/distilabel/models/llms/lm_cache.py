@@ -61,9 +61,18 @@ class LMCacheDB:
                 isolation_level=None  # autocommit mode
             )
             # Enable WAL mode for better concurrent access
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA synchronous=NORMAL")
-            conn.execute("PRAGMA cache_size=10000")
+            try:
+                conn.execute("PRAGMA journal_mode=WAL")
+            except Exception as e:
+                self._logger.warning(f"Failed to set PRAGMA journal_mode=WAL: {e}")
+            try:
+                conn.execute("PRAGMA synchronous=NORMAL")
+            except Exception as e:
+                self._logger.warning(f"Failed to set PRAGMA synchronous=NORMAL: {e}")
+            try:
+                conn.execute("PRAGMA cache_size=10000")
+            except Exception as e:
+                self._logger.warning(f"Failed to set PRAGMA cache_size=10000: {e}")
             yield conn
         finally:
             if conn:

@@ -61,11 +61,17 @@ def _combine_evidence(evidence: list[str], relevant: list[bool], **kwargs) -> di
     return {'distilled_evidence': combined, 'combined_evidence': verbose_combined}
 
 
-def _set_lc_mm_source(relevance_score: list[float], page_source: list[str], K: int, **kwargs) -> dict:
+def _set_lc_mm_source(
+    relevance_score: list[float], 
+    page_source: list[str], 
+    K: int, 
+    min_relevance_score: float = 5.0, 
+    **kwargs
+) -> dict:
     '''Takes the top K most relevant pages and sets them as the source'''
     assert len(page_source) == len(relevance_score)
     top_k_pages = np.argsort(relevance_score)
-    top_k_pages = top_k_pages[np.array(relevance_score)[top_k_pages] >= 5][-K:]
+    top_k_pages = top_k_pages[np.array(relevance_score)[top_k_pages] >= min_relevance_score][-K:]
     # reversed orders it so that the highest relevance score is first
     return {'source': [page_source[i] for i in reversed(top_k_pages)]}
 
@@ -243,7 +249,7 @@ def run_pipeline(config: Config, dataset: Dataset):
         generate_answers_text_only = [
             LMGenerationTask(
                 use_cache=True,
-                invalidate_cache=True,
+                # invalidate_cache=True,
                 name=f'answer_generation_text_only_{i}',
                 stage=stage1,
                 llm=lm,
@@ -340,7 +346,7 @@ def convert_to_vision(row: dict, path_substitution: tuple[str, str] | None = Non
         ''.join([f'<IMG_{i}>' for i in range(len(image_indices))])
         + row['question']
     )
-    assistant_content = f'<think>{row['distilled_evidence']}</think>{row['answer']}'
+    assistant_content = f'<think>{row['distilled_evidence']}</think>\n{row['answer']}'
     messages = [
         {'role': 'user', 'content': user_content},
         {'role': 'assistant', 'content': assistant_content}
@@ -410,15 +416,6 @@ if __name__ == '__main__':
     images_ds = load_from_disk(IMAGES_DS_PATH)
     fn_to_idx = utils.generate_field_to_idx(images_ds, 'image_filename', config.path_substitution)
 
-    # no_cot_vds = utils.format_distiset(
-    #     distiset, 
-    #     images_ds_path=IMAGES_DS_PATH,
-    #     path_substitution=config.path_substitution,
-    #     cols_to_keep=['answer_model_name', 'split'], 
-    #     n_workers=16,
-    # )
-    # no_cot_vds.save_to_disk(CACHE_DIR / 'synthetic_cot_for_multi_turn_vds')
-
     distiset = utils.format_distiset(
         distiset, 
         convert_to_vision, 
@@ -427,10 +424,19 @@ if __name__ == '__main__':
         n_workers=16,
     )
 
+    distiset = distiset.shuffle(seed=0)
+    mt = distiset.select(range(200))
+    mt.save_to_disk(CACHE_DIR / 'for_multi_turn' / 'synthetic_cot_vds')
+    distiset = distiset.select(range(200, len(distiset)))
     distiset.save_to_disk(CACHE_DIR / 'synthetic_cot_vds')
 
-    hn = distiset.filter(utils.hf_batched(lambda row: 'hn' in row['split']), batched=True, num_proc=16).remove_columns(['split'])
-    doc = distiset.filter(utils.hf_batched(lambda row: 'doc' in row['split']), batched=True, num_proc=16).remove_columns(['split'])
+    # hn = distiset.filter(utils.hf_batched(lambda row: 'hn' in row['split']), batched=True, num_proc=16).remove_columns(['split'])
+    # doc = distiset.filter(utils.hf_batched(lambda row: 'doc' in row['split']), batched=True, num_proc=16).remove_columns(['split'])
 
-    hn.save_to_disk(CACHE_DIR / 'synthetic_cot_hn_vds')
-    doc.save_to_disk(CACHE_DIR / 'synthetic_cot_doc_vds')
+    # hn.save_to_disk(CACHE_DIR / 'synthetic_cot_hn_vds')
+    # doc.save_to_disk(CACHE_DIR / 'synthetic_cot_doc_vds')
+
+'''
+MAYBE SWITCH TO QWEN 3 VL 30B FOR EVIDENCE EXTRACTION 
+UPDATE THE PROMPTING
+'''

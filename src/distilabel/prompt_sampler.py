@@ -39,6 +39,9 @@ class PromptSampler:
                 # or a ValueError
                 pass
             kwargs.append(sampled_value)
+        def _clean(s: str) -> str:
+            return s.replace('{{', '{').replace('}}', '}')
+        kwargs = [_clean(s) for s in kwargs]
         if dist.samples_per_prompt == 1:
             return kwargs[0]
         return kwargs

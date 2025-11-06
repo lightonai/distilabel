@@ -46,17 +46,6 @@ def _resolve_path(path: str) -> str:
 SEED = 0
 random.seed(SEED)
 
-# TARGET_COUNTS = {
-#     'true_multi_page_short_hn': 700_000,
-#     'true_multi_page_short_doc': 1_200_000,
-#     'recursive_hn': 150_000,
-#     'recursive_doc': 300_000,
-#     'full_context_one_shot_hn': 150_000,
-#     'full_context_one_shot_doc': 300_000,
-#     'reasoning_hn': 150_000,
-#     'reasoning_doc': 300_000,
-# } # this divided by 10_000 gave 800 questions
-
 TARGET_COUNTS = {
     'true_multi_page_short_hn': 1_000,
     'true_multi_page_short_doc': 1_800,
@@ -67,6 +56,17 @@ TARGET_COUNTS = {
     'reasoning_hn': 500,
     'reasoning_doc': 1_000,
 }
+
+# TARGET_COUNTS = {  # 
+#     'true_multi_page_short_hn': 25,
+#     'true_multi_page_short_doc': 50,
+#     'recursive_hn': 25,
+#     'recursive_doc': 50,
+#     'full_context_one_shot_hn': 25,
+#     'full_context_one_shot_doc': 50,
+#     'reasoning_hn': 25,
+#     'reasoning_doc': 50,
+# }
 
 IDX_TO_IFN_IMAGES_DS = None  # filled in main
 FN_TO_PAGE_COUNT = None  # filled in main
@@ -192,7 +192,7 @@ def structured_and_requires_multiple_pages(row: dict, cols: list[str]) -> bool:
     return not any(row['question_fully_answered']) and structured
 
 
-def build_seeds(ds: Dataset, target_counts: dict[str, int]) -> list[dict[str, Any]]:
+def build_seeds(ds: Dataset, target_counts: dict[str, int], allow_doc_reuse: bool = False) -> list[dict[str, Any]]:
     """Build initial 2–5 page seeds for all 8 target splits."""
     # Precompute mapping and page counts
     global IDX_TO_IFN_IMAGES_DS, FN_TO_PAGE_COUNT
@@ -206,6 +206,8 @@ def build_seeds(ds: Dataset, target_counts: dict[str, int]) -> list[dict[str, An
     # Helpers for type assignment
     def want(split: str) -> bool:
         '''are more rows needed for this split?'''
+        if split not in need:
+            return False
         return len(seeds[split]) < need[split]
 
     def add_to_seed(split: str, src: list[str], row: dict[str, Any]):
@@ -220,15 +222,22 @@ def build_seeds(ds: Dataset, target_counts: dict[str, int]) -> list[dict[str, An
             'hard_negs_idx_txt_img': row.get('hard_negs_idx_txt_img', []),
         })
 
-    # Iterate rows and fill splits uniformly by type where applicabl
+    # Iterate rows and fill splits uniformly by type where applicable
     idx_doc = 0
 
+    docs_used = set()
     ds = list(ds)
     for row in tqdm(ds, desc='Building seeds'):
         # if all target splits are filled, stop
         if all(len(seeds[k]) >= need[k] for k in need):
             break
+            
         anchor = _resolve_path(row['image_filename'])
+        # if doc reuse is not allowed, skip if the doc has already been used
+        pdf_path = utils.pdf_name(anchor)
+        if not allow_doc_reuse and pdf_path in docs_used:
+            continue
+        docs_used.add(pdf_path)
 
         # true_multi_page_short_hn: only close hard negs, top 8
         if want('true_multi_page_short_hn'):
@@ -274,13 +283,8 @@ def build_seeds(ds: Dataset, target_counts: dict[str, int]) -> list[dict[str, An
     return all_seeds
 
 
-# ----------------------------------------------------------------------------
-# Run stages 0–2 from true_multi_page (no final answers)
-# ----------------------------------------------------------------------------
-
 STAGE = 0
-BATCH_SIZE = 128
-
+BATCH_SIZE = 256
 
 def run_pipeline_for_questions(seed_ds: Dataset, config: Config):
     global STAGE
@@ -443,7 +447,7 @@ def run_pipeline_for_questions(seed_ds: Dataset, config: Config):
         judge_answers = [
             LMGenerationTask(
                 use_cache=True,
-                # invalidate_cache=True,
+                invalidate_cache=True,
                 name=f'answer_judge_{i}',
                 stage=stage,
                 llm=lm,

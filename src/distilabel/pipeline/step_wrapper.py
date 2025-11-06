@@ -298,11 +298,15 @@ class _StepWrapper:
             raise _StepWrapperException(str(e), self._sanitized_step_for_exception(), 2, e) from e
 
     def _count_none(self, data: List[Dict[str, Any]]) -> int:
+        none_allowed_fields = getattr(self.step, 'none_allowed_fields', [])
         return sum(
             1 for row in data
             if any(
                 row.get(self.step.output_mappings.get(col, col), -1) is None 
-                for col in self.step.outputs if col != 'reasoning'
+                for col in self.step.outputs if (
+                    col != 'reasoning'
+                    and col not in none_allowed_fields
+                )
             )
         )
 
@@ -450,7 +454,9 @@ class _StepWrapper:
         """
         if len(batch.data) == 0:
             return []
-        return self.step.impute_step_outputs(batch.data[0])
+        out = self.step.impute_step_outputs(batch.data[0])
+        batch.invalidate_signature_cache()
+        return out
 
     def _send_batch(self, batch: _Batch) -> None:
         """Sends a batch to the `output_queue`."""

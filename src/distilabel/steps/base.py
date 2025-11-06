@@ -730,7 +730,7 @@ class Step(_Step, ABC):
         reverted_input_mappings = {v: k for k, v in self.input_mappings.items()}
 
         renamed_inputs = []
-        overriden_inputs = {}
+        overriden_inputs_list: List[Dict[str, Any]] = []
         for i, row_inputs in enumerate(inputs):
             renamed_row_inputs = []
             for row in row_inputs:
@@ -742,13 +742,17 @@ class Step(_Step, ABC):
                     if renamed_key not in renamed_row or k != renamed_key:
                         renamed_row[renamed_key] = v
 
-                        if k != renamed_key and renamed_key in row and len(inputs) == 1:
+                        if k != renamed_key and renamed_key in row:
                             overriden_keys[renamed_key] = row[renamed_key]
 
-                overriden_inputs[str(overriden_keys)] = overriden_keys
+                # Preserve per-row override order across all input sources
+                overriden_inputs_list.append(overriden_keys)
                 renamed_row_inputs.append(renamed_row)
             renamed_inputs.append(renamed_row_inputs)
-        return tuple(renamed_inputs), list(overriden_inputs.values())
+        # Ensure non-empty overrides to avoid division by zero downstream
+        if not overriden_inputs_list:
+            overriden_inputs_list = [{}]
+        return tuple(renamed_inputs), overriden_inputs_list
 
     def _apply_mappings_and_restore_overriden(
         self, row: Dict[str, Any], overriden: Dict[str, Any]

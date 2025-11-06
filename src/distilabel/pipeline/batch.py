@@ -12,7 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import logging
 import copy
+import json
 from uuid import uuid4
 import hashlib
 from pathlib import Path
@@ -21,6 +23,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import fsspec
 import pyarrow as pa
 import pyarrow.parquet as pq
+import polars as pl
 from upath import UPath
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
@@ -28,6 +31,10 @@ from distilabel.utils import get_timer
 from distilabel.mixins.signature import SignatureMixin
 from distilabel.utils.serialization import _Serializable
 from .routed_to_cache import get_routed_to_cache_db
+
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from logging import Logger
 
 _timer = get_timer()
 
@@ -63,10 +70,37 @@ class _Batch(_Serializable, SignatureMixin):
     size: int = 0
     _num_rows_fs: int | None = PrivateAttr(default=None)
     _fs: Optional[fsspec.AbstractFileSystem] = PrivateAttr(default=None)
+    _signature_cache: Optional[str] = PrivateAttr(default=None)
+    _signature_cache_valid: bool = PrivateAttr(default=False)
+    _logger: "Logger" = PrivateAttr(None)
 
-    def model_post_init(self, context) -> None:
+    def model_post_init(self, __context: Any) -> None:
+        super().model_post_init(__context)
+        self._logger = logging.getLogger(f"distilabel.batch.{self.step_name}.{self.seq_no}")
         # want the signature to only depend on data
         self.exclude_from_signature = (set(_Batch.model_fields.keys()) | {'type_info'}) - {'data'}
+
+    @_timer.time_it
+    def invalidate_signature_cache(self) -> None:
+        """Invalidates the signature cache.
+        
+        This should be called whenever the data of the batch is modified.
+        """
+        self._signature_cache_valid = False
+
+    @property
+    def signature(self) -> str:  # type: ignore[override]
+        """Return cached signature if available; otherwise compute and cache it.
+
+        The signature for a batch depends only on `data`.
+        """
+        with _timer.time_block("batch.signature"):
+            if self._signature_cache_valid:
+                return self._signature_cache
+            # compute using parent mixin logic
+            self._signature_cache = SignatureMixin.signature.fget(self)
+            self._signature_cache_valid = True
+            return self._signature_cache
 
     def next_batch(self) -> "_Batch":
         """Create a new `_Batch` instance with the next batch of data.
@@ -90,6 +124,7 @@ class _Batch(_Serializable, SignatureMixin):
         """
         self.data = data
         self.size = len(data[0])
+        self.invalidate_signature_cache()
 
     @_timer.time_it
     def get_data(self, num_rows: Union[int, None] = None) -> List[Dict[str, Any]]:
@@ -124,6 +159,8 @@ class _Batch(_Serializable, SignatureMixin):
             self.data[0] = self.data[0][num_rows:]
 
         # self.size = len(self.data[0])
+        # update signature cache after in-place mutation
+        self.invalidate_signature_cache()
         return data
 
     def num_rows(self) -> int:
@@ -258,9 +295,21 @@ class _Batch(_Serializable, SignatureMixin):
             )
 
         for file in self._fs.ls(self.data_path):
-            with self._fs.open(file, "rb") as f:
-                table = pq.read_table(f)
-                self.data.append(table.to_pylist())
+            try:
+                with self._fs.open(file, "rb") as f:
+                    table = pq.read_table(f)
+                    self.data.append(table.to_pylist())
+            except Exception as e:
+                self._logger.warning(
+                    f"Error reading batch data from fs {file}: {e} "
+                    "falling back to polars, but note that polars can hang in certain multi-processing scenarios. "
+                    "These scenarios are rare (e.g. running a pipeline multiple times in a single program), "
+                    "so this issue has not been solved yet."
+                )
+                # pyarrow parquet can get some errors with chunked array outputs with large batches,
+                # polars seems to be more robust
+                table = pl.read_parquet(file)
+                self.data.append(table.to_dicts())
 
         self._fs.rm(self.data_path, recursive=True)
         self._num_rows_fs = None

@@ -10,14 +10,14 @@ from distilabel.pydantics import (
 )
 
 EXCLUDE_PDFS = set(Path('/mnt/nfs/austin_shared/mp_data_gen/bench_pdfs.txt').read_text().splitlines())
-DS_PATH = Path('/mnt/nfs/austin_shared/mp_data_gen/distilabel/out/lc_sft/true_multi_page_q_ds')
+CACHE_DIR = Path('/mnt/nfs/austin_shared/mp_data_gen/distilabel/out/lc_sft/prompt_sampler_fixed')
+DS_PATH = Path(CACHE_DIR / 'true_multi_page_q_ds')
 IMAGES_DS_PATH = Path('/mnt/nfs/austin_shared/data/all_pdfs_images_ds')
 PDF_ROOT = Path('/mnt/nfs/pdfs')
-CACHE_DIR = Path('/mnt/nfs/austin_shared/mp_data_gen/distilabel/out/lc_sft')
-AVAILABLE_GPUS = [0, 1, 2, 3]
+AVAILABLE_GPUS = [0, 1, 2, 3, 4, 5, 6, 7]
 PATH_SUBSTITUTION = ('/lustre/fsn1/projects/rech/eya/uzj46do/pdfs/', '/mnt/nfs/pdfs/')
 
-PIPELINE_NAME = 'true_multi_page_a_v0'
+PIPELINE_NAME = 'true_multi_page_a_v1'
 
 def answer_lm_config(
     path: str, 
@@ -37,12 +37,12 @@ def answer_lm_config(
         tp_size=gpu_mesh[1],
         replicas_per_vllm_server=gpu_mesh[2],
         vllm_kwargs={
-            'limit-mm-per-prompt': "'{\"image\": 10}'",
+            'limit-mm-per-prompt': "'{\"image\": 10, \"video\": 0}'",
             'max-model-len': '32768',
             'gpu-memory-utilization': 0.92,
         } | ({'quantization': 'fp8'} if 'FP8-Dynamic' not in path else {
             'max-num-batched-tokens': '4096',
-            'max-num-seqs': '8',
+            'max-num-seqs': '128',
             'enable-expert-parallel': None,
             'mm-processor-cache-gb': '0',
         }),
@@ -56,9 +56,8 @@ stages = [
         lm_configs=[ # gemini flash, gpt 5 mini, Qwen/Qwen3-VL-235B-A22B-Instruct-FP8
             answer_lm_config('gemini-2.5-flash', data_ratio=0.5, gpu_mesh=(1, None, 1)),
             answer_lm_config('gemini-2.5-flash-lite', data_ratio=0.5, gpu_mesh=(1, None, 1)),
-            # answer_lm_config('gpt-5-mini', data_ratio=0.1, gpu_mesh=(1, None)),
-            # answer_lm_config('gpt-5-nano', data_ratio=1.0, gpu_mesh=(1, None)),
-            answer_lm_config('RedHatAI/Qwen3-VL-235B-A22B-Instruct-FP8-Dynamic', data_ratio=1.0, gpu_mesh=(2, 4, 2)),
+            # answer_lm_config('gemini-2.5-pro', data_ratio=1.0, gpu_mesh=(1, None, 1)),
+            answer_lm_config('RedHatAI/Qwen3-VL-235B-A22B-Instruct-FP8-Dynamic', data_ratio=1.0, gpu_mesh=(4, 4, 2)),
         ],
         available_gpus=AVAILABLE_GPUS,
         max_dims=(1000, 1000),

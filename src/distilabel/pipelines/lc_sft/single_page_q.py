@@ -40,9 +40,14 @@ from distilabel.configs.lc_sft.single_page_q import (
 def _resolve_path(path: str) -> str:
     return path.replace(config.path_substitution[0], config.path_substitution[1])
 
-def get_ds(n: int, front=True) -> Dataset:
+def get_ds(n: int, front=True, allow_doc_reuse: bool = False) -> Dataset:
     dataset = load_from_disk(DS_PATH)
     dataset = dataset.shuffle(seed=1)
+
+    # if doc reuse is not allowed, prune the dataset to only include one page from each doc (first occurrence)
+    if not allow_doc_reuse:
+        dataset = utils.take_first_doc_occurrence(dataset, _resolve_path)
+
     n = min(n, len(dataset))
     dataset = dataset.select(range(n) if front else range(len(dataset) - n, len(dataset)))
     dataset = dataset.map(lambda x: {'source': [_resolve_path(x['image_filename'])]}, num_proc=32)
@@ -51,16 +56,15 @@ def get_ds(n: int, front=True) -> Dataset:
 
 STAGE = 0
 '''tracks the current stage of the pipeline'''
-BATCH_SIZE = 128
+BATCH_SIZE = 256
 
 def run_pipeline(config: Config):
     global STAGE
     global BATCH_SIZE
     
     stages = config.stages
-    # dataset = get_ds(5_000_000, front=True)
-    # dataset = get_ds(20_000, front=True)
     dataset = get_ds(15_000, front=True)
+    # dataset = get_ds(150, front=True)
     dataset = utils.remove_pdfs_from_dataset(dataset, EXCLUDE_PDFS, row_to_ifn=lambda row: row['source'][0], num_proc=32)
     dataset = utils.remove_pdfs_with_pages_(dataset, PDF_ROOT, CACHE_DIR, less_than=2, more_than=336, row_to_ifn=lambda row: row['source'][0], num_proc=32)
     # dataset = get_ds(100)
@@ -122,7 +126,7 @@ def run_pipeline(config: Config):
             )
         ),
         use_cache=True,
-        # invalidate_distiset=True,
+        invalidate_distiset=True,
     )
     return distiset, cost_tracker
 
@@ -230,7 +234,7 @@ def augment_into_splits(
     '''
     ds = DatasetDict()
     for split_name, start, end in zip(split_names, accumulate([0] + split_sizes[:-1]), accumulate(split_sizes)):
-        ds[split_name] = dataset.select(range(start, end))
+        ds[split_name] = dataset.select(range(start, min(end, len(dataset))))
         if split_name == 'distractors_short':
             ds[split_name].save_to_disk(CACHE_DIR / 'distractors_short_q')
             ds[split_name] = (
@@ -317,6 +321,6 @@ if __name__ == "__main__":
         'reasoning_hn',
         'reasoning_doc',
     ]
-    ds = augment_into_splits(distiset, split_sizes, split_names, FN_TO_PAGE_COUNT, IDX_TO_IFN_IMAGES_DS)
+    ds = augment_into_splits(distiset, split_sizes, split_names, FN_TO_PAGE_COUNT, IDX_TO_IFN_IMAGES_DS, num_proc=1)
     ds.save_to_disk(CACHE_DIR / 'single_page_q_ds')
 

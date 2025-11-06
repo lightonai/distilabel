@@ -28,16 +28,19 @@ from distilabel.mixins.runtime_parameters import RuntimeParameter
 if TYPE_CHECKING:
     from logging import Logger
 
-_CUDA_DEVICE_PLACEMENT_MIXIN_FILE = (
-    Path(tempfile.gettempdir())
-    / "distilabel"
-    / "cuda_device_placement"
-    / socket.gethostname()
-    / "distilabel_cuda_device_placement_mixin.json"
-)
+_CUDA_DEVICE_PLACEMENT_MIXIN_FILE = None
 
-if _CUDA_DEVICE_PLACEMENT_MIXIN_FILE.exists():
-    _CUDA_DEVICE_PLACEMENT_MIXIN_FILE.unlink()
+def set_cuda_device_placement_file(pipeline_name: str) -> Path:
+    global _CUDA_DEVICE_PLACEMENT_MIXIN_FILE
+    _CUDA_DEVICE_PLACEMENT_MIXIN_FILE = (
+        Path(tempfile.gettempdir())
+        / "distilabel"
+        / "cuda_device_placement"
+        / socket.gethostname()
+        / pipeline_name
+        / "distilabel_cuda_device_placement_mixin.json"
+    )
+    return _CUDA_DEVICE_PLACEMENT_MIXIN_FILE
 
 
 class CudaDevicePlacementMixin(BaseModel):
@@ -144,6 +147,8 @@ class CudaDevicePlacementMixin(BaseModel):
             f.seek(0)
             f.truncate()
             f.write(json.dumps(content))
+            f.flush()
+            os.fsync(f.fileno())
 
     def _assign_cuda_devices(self) -> None:
         """Assigns CUDA devices to the LLM based on the device placement information provided

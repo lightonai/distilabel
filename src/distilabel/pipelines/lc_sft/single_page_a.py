@@ -124,7 +124,7 @@ def run_pipeline(config: Config):
             )
         ),
         use_cache=True,
-        # invalidate_distiset=True,
+        invalidate_distiset=True,
     )
     return distiset, cost_tracker
 

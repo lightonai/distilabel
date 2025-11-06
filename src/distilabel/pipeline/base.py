@@ -49,6 +49,9 @@ from distilabel.constants import (
 from distilabel.distiset import create_distiset
 from distilabel.errors import DistilabelUserError
 from distilabel.mixins.requirements import RequirementsMixin
+from distilabel.models.mixins.cuda_device_placement import set_cuda_device_placement_file
+from distilabel.models.mixins.vllm_server_placement import set_vllm_server_placement_file
+from distilabel.models.mixins.vllm_server_sharing import set_vllm_server_sharing_file
 from distilabel.pipeline._dag import DAG
 from distilabel.pipeline.batch import _Batch
 from distilabel.pipeline.batch_manager import _BatchManager
@@ -197,6 +200,7 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
         enable_metadata: bool = False,
         requirements: Optional[List[str]] = None,
         debug: bool = False,
+        disable_output_queue_timeout: bool = False,
     ) -> None:
         """Initialize the `BasePipeline` instance.
 
@@ -212,6 +216,7 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
                 Defaults to `None`, but can be helpful to inform in a pipeline to be shared
                 that this requirements must be installed.
             debug: Whether to save the sent and received batches to the cache. Defaults to `False`.
+            disable_output_queue_timeout: Whether to disable the timeout for the output queue. Defaults to `False`.
         """
         self.name = name or _PIPELINE_DEFAULT_NAME
         self.description = description
@@ -222,6 +227,7 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
         self.use_cache = False
         self._cached_signature = None
         self._cached_agg_step_signature = None
+        self._disable_output_queue_timeout = disable_output_queue_timeout
 
         if cache_dir:
             self._cache_dir = Path(cache_dir)
@@ -394,6 +400,7 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
         """
         self.use_cache = use_cache
         self.invalidate_distiset = invalidate_distiset
+        self._clean_up_mixins_files()
 
         self._exception: Union[Exception, None] = None
 
@@ -509,6 +516,15 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
 
         self._dry_run = False
         return distiset
+
+    def _clean_up_mixins_files(self) -> None:
+        """Cleans up the mixins files."""
+        if (shared_file := set_cuda_device_placement_file(self.name)).exists():
+            shared_file.unlink()
+        if (shared_file := set_vllm_server_placement_file(self.name)).exists():
+            shared_file.unlink()
+        if (shared_file := set_vllm_server_sharing_file(self.name)).exists():
+            shared_file.unlink()
 
     def get_load_stages(self, load_groups: Optional["LoadGroups"] = None) -> LoadStages:
         """Convenient method to get the load stages of a pipeline.
@@ -1025,13 +1041,19 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
             while continue_breakpoint_loop:
                 try:
                     if (batch := self._output_queue.get(timeout=15)) is None:
-                        self._logger.debug("Received `None` from output queue. Breaking loop.")
+                        self._logger.info("Received `None` from output queue. Breaking loop.")
                         continue_loop = False
                     continue_breakpoint_loop = False
                     time_at_last_batch = time.time()
                 except Exception as e:
-                    if (time.time() - time_at_last_batch) > constants.OUTPUT_QUEUE_TIMEOUT:
-                        self._logger.debug("Timeout waiting for output batch. Breaking loop.")
+                    if (
+                        not self._disable_output_queue_timeout and
+                        (time.time() - time_at_last_batch) > constants.OUTPUT_QUEUE_TIMEOUT
+                    ):
+                        self._logger.error(
+                            "Timeout waiting for output batch after "
+                            f"{constants.OUTPUT_QUEUE_TIMEOUT=} seconds. Breaking loop."
+                        )
                         continue_breakpoint_loop = False
                         continue_loop = False
                     else:
@@ -1177,6 +1199,7 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
         self._logger.debug(
             f"Batch {batch.seq_no} from {step.name} with llm {step.llm.model_name} cost {batch_cost}"
         )
+        batch.invalidate_signature_cache()
 
     def _set_step_for_recovering_offline_batch_generation(
         self, step: "_Step", data: List[List[Dict[str, Any]]]
@@ -1259,6 +1282,7 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
             self._current_stage += 1
             stage_exists = self._current_stage < len(stage_last_steps)
 
+        self._clean_up_mixins_files()
         self._start_steps_for_stage(self._current_stage)
         return True
 
@@ -1305,6 +1329,8 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
 
         if self._timer._enabled:
             self._logger.info(self._timer.get_summary())
+        
+        self._clean_up_mixins_files()
 
     def _run_load_queue_loop_in_thread(self) -> threading.Thread:
         """Runs a background thread that reads from the `load_queue` to update the status

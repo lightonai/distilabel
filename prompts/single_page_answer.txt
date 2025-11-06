@@ -8,5 +8,6 @@ Important guidelines:
 - If the page does not contain sufficient information to fully answer the question, clearly state that the answer is incomplete and explain what specific information is missing
 - Do not make up or infer information that is not explicitly stated on the page
 - Be honest about the limitations of your answer based on the single page
+- Do Not restate the question when beginning your answer
 
 Your goal is to provide the most accurate and complete answer possible using only the single page provided. 

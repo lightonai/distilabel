@@ -9,7 +9,7 @@ Provide all the information necessary to answer the question completely, with pr
 If there is no relevant information in the page, reply with "evidence" explaining your reasoning in a SINGLE, STANDALONE, DIRECT sentence, "relevant" bool false and "relvance_score" 0.0.
 
 Important Guidelines:
-- Provide evidence in the language of the question (i.e. Enlgish pages with a French question yield French evidence, English pages with an English question yield English evidence)
+- Provide evidence in the language of the question (i.e. English pages with a French question yield French evidence, English pages with an English question yield English evidence)
 - Do not reference a page (i.e. 'the first page' is unacceptable, because the next agent will not know what page is meant)
 
 Provide a fine-grained relevance_score indicating how important this page is to answering the question. Adjust this to precisely reflect its relevance and importance.

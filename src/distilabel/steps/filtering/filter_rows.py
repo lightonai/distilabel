@@ -54,4 +54,6 @@ class FilterRows(Step):
                     else self.condition(row)  # allow specifying cols with partial or taking the whole row
                 )
             ])
+        if len(out) <= 0.9 * sum(len(i) for i in inputs):
+            self._logger.warning(f"{len(out)} / {sum(len(i) for i in inputs)} rows remaining.")
         yield out

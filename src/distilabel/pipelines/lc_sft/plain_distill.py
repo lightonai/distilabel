@@ -1,5 +1,5 @@
 from distilabel.pipeline import Pipeline
-from datasets import load_from_disk, concatenate_datasets
+from datasets import load_from_disk, concatenate_datasets, Dataset
 import random
 
 from distilabel.steps import (
@@ -15,31 +15,28 @@ from distilabel import utils
 import distilabel.utils.pipe_utils as pipe_utils
 from distilabel.pydantics import Config
 
-from distilabel.configs.lc_sft.multi_page_a import (
+from distilabel.configs.lc_sft.plain_distill import (
     config,
-    DS_PATH,
+    SP_DS_PATH,
+    MP_DS_PATH,
     IMAGES_DS_PATH,
     CACHE_DIR,
     PIPELINE_NAME,
 )
 
 STAGE = 0
-BATCH_SIZE = 256
+BATCH_SIZE = 128
 
 
-def run_pipeline(config: Config):
+def run_pipeline(config: Config, dataset: Dataset):
     global STAGE, BATCH_SIZE
     random.seed(0)
 
-    ds_dict = load_from_disk(DS_PATH)
-    hn = ds_dict['hn_short']
-    adj = ds_dict['adj_short']
-    dataset = concatenate_datasets([utils.add_split_label_ds(hn, 'hn_short'), utils.add_split_label_ds(adj, 'adj_short')])
-
     with Pipeline(
         name=PIPELINE_NAME,
-        description='Generate multi-page answers for single-page questions using multi-page context',
-        cache_dir=CACHE_DIR / 'multi_page_a',
+        description='Full visual context answer from strong visual lc models',
+        cache_dir=CACHE_DIR / 'plain_distill',
+        disable_output_queue_timeout=True,
     ) as pipeline:
         stage = config.stages[STAGE]
         load_data = LoadDataFromDataset(name='load_data', dataset=dataset, batch_size=BATCH_SIZE)
@@ -57,6 +54,7 @@ def run_pipeline(config: Config):
                 lm_config=lm.lm_config,
                 input_formatter=lm.format_input,
                 parallel_input_formatter=lm.parallel_format_inputs,
+                system_col='default_system',  # use model default system prompt
                 lm_input_cols=['question'],
                 input_batch_size=BATCH_SIZE,
                 resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.n_gpus, oversubscribe=lm.lm_config.replicas_per_vllm_server),
@@ -82,13 +80,46 @@ def run_pipeline(config: Config):
             )
         ),
         use_cache=True,
-        # invalidate_distiset=True,
+        invalidate_distiset=True, 
     )
     return distiset, cost_tracker
 
 
 if __name__ == '__main__':
-    distiset, cost_tracker = run_pipeline(config)
+    cols_to_keep = ['source', 'question', 'split', 'question_model_name']
+    sp_ds_dict = load_from_disk(SP_DS_PATH)
+    mp_ds_dict = load_from_disk(MP_DS_PATH)
+
+    sp_splits = [
+        'distractors_short',
+        'adj_short',
+        'hn_short',
+        'recursive_hn',
+        'recursive_doc',
+        'full_context_one_shot_hn',
+        'full_context_one_shot_doc',
+        'reasoning_hn',
+        'reasoning_doc',
+    ]
+    mp_splits = [
+        'true_multi_page_short_hn',
+        'true_multi_page_short_doc',
+        'recursive_hn',
+        'recursive_doc',
+        'full_context_one_shot_hn',
+        'full_context_one_shot_doc',
+        'reasoning_hn',
+        'reasoning_doc',
+    ]
+
+    datasets: list[Dataset] = []
+    for split in sp_splits:
+        datasets.append(utils.add_split_label_ds(sp_ds_dict[split], f'sp_{split}'))
+    for split in mp_splits:
+        datasets.append(utils.add_split_label_ds(mp_ds_dict[split], f'mp_{split}'))
+    dataset = concatenate_datasets(datasets).select_columns(cols_to_keep)
+
+    distiset, cost_tracker = run_pipeline(config, dataset)
     print(f"Cost: {dict(cost_tracker)}")
     distiset = distiset['default']['train']
     distiset = distiset.remove_columns(['distilabel_metadata'])
@@ -101,8 +132,4 @@ if __name__ == '__main__':
         n_workers=16,
     )
 
-    hn = distiset.filter(utils.hf_batched(lambda row: row['split'] == 'hn_short'), batched=True, num_proc=8)
-    adj = distiset.filter(utils.hf_batched(lambda row: row['split'] == 'adj_short'), batched=True, num_proc=8)
-
-    hn.save_to_disk(CACHE_DIR / 'rag_short_vds')
-    adj.save_to_disk(CACHE_DIR / 'adj_short_vds')
+    distiset.save_to_disk(CACHE_DIR / 'plain_distill_vds')

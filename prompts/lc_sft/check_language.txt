@@ -1,0 +1,7 @@
+You are tasked with checking if the given question and answer are in the same language.
+
+Here is the output format, provide nothing except this:
+{{
+    "analysis": str (short chain of thought to determine your answer),
+    "answer_language_matches_question_language": bool ("whether or not the languages match")
+}}

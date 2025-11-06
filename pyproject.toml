@@ -20,7 +20,7 @@ classifiers = [
 dependencies = [
     # Bump `datasets` to support `load_dataset` from cache
     # Ref https://github.com/huggingface/datasets/releases/tag/2.16.0
-    "torch",
+    "torch==2.8.0",
     "vllm == 0.11.0",
     "transformers == 4.57.0",
     "datasets == 3.6.0",
@@ -43,6 +43,7 @@ dependencies = [
     "universal_pathlib >= 0.2.2",
     "portalocker >= 2.8.2",
     "PyPDF2",
+    "polars",
 ]
 dynamic = ["version"]
 

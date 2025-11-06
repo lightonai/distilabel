@@ -1,9 +1,22 @@
+from distilabel.pipeline import Pipeline
+
 from datasets import load_from_disk, concatenate_datasets, Dataset
 import random
 
+import distilabel.utils.pipe_utils as pipe_utils
+from distilabel.pydantics import Config
 from distilabel import utils
 
-from distilabel.configs.lc_sft.reasoning_a import (
+from distilabel.steps import (
+    StepResources,
+    LoadDataFromDataset,
+    FilterRows,
+)
+from distilabel.steps.tasks import (
+    LMGenerationTask,
+)
+
+from distilabel.configs.lc_sft.visual_reasoning_a import (
     config,
     SP_DS_PATH,
     MP_DS_PATH,
@@ -11,9 +24,66 @@ from distilabel.configs.lc_sft.reasoning_a import (
     IMAGES_DS_PATH,
     PIPELINE_NAME,
 )
-from distilabel.pipelines.lc_sft.full_context_one_shot_a import run_pipeline
 
 fn_to_idx: dict[str, int] | None = None
+
+STAGE = 0
+BATCH_SIZE = 128
+
+def run_pipeline(config: Config, dataset: Dataset):
+    global STAGE, BATCH_SIZE
+    random.seed(0)
+
+    with Pipeline(
+        name=PIPELINE_NAME,
+        description='Full visual context answer from strong visual lc models',
+        cache_dir=CACHE_DIR / 'visual_reasoning_a',
+        disable_output_queue_timeout=True,
+    ) as pipeline:
+        stage = config.stages[STAGE]
+        load_data = LoadDataFromDataset(name='load_data', dataset=dataset, batch_size=BATCH_SIZE)
+
+        lms = pipe_utils.make_lms(config, stage, use_cache=True)
+        answer_router = pipe_utils.data_router(
+            step_distribution=[lm.lm_config.data_ratio for lm in lms]
+        )
+        generate_answers = [
+            LMGenerationTask(
+                use_cache=True,
+                name=f"answer_generation_{i}",
+                stage=stage,
+                llm=lm,
+                lm_config=lm.lm_config,
+                input_formatter=lm.format_input,
+                parallel_input_formatter=lm.parallel_format_inputs,
+                lm_input_cols=['question'],
+                input_batch_size=BATCH_SIZE,
+                resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.n_gpus, oversubscribe=lm.lm_config.replicas_per_vllm_server),
+                output_mappings={'system': 'answer_system', 'model_name': 'answer_model_name', 'generation': 'answer'},
+                **lm.lm_config.task_kwargs,
+            )
+            for i, lm in enumerate(lms)
+        ]
+        drop_none_answers = FilterRows(
+            name='drop_none_answers',
+            cols=['answer'],
+            condition=utils.generation_is_structured,
+            input_batch_size=BATCH_SIZE,
+        )
+
+        load_data >> answer_router >> generate_answers >> drop_none_answers
+
+    distiset, cost_tracker = pipeline.run(
+        load_groups=(
+            pipe_utils.steps_to_load_groups(
+                [load_data, *generate_answers, drop_none_answers],
+                len(stage.available_gpus),
+            )
+        ),
+        use_cache=True,
+        # invalidate_distiset=True, 
+    )
+    return distiset, cost_tracker
 
 def convert_to_vision(row: dict, path_substitution: tuple[str, str] | None = None, **kwargs) -> dict:
     '''
@@ -87,7 +157,7 @@ if __name__ == '__main__':
         datasets.append(utils.add_split_label_ds(mp_ds_dict[split], f'mp_{split}'))
     dataset = concatenate_datasets(datasets)
 
-    distiset, cost_tracker = run_pipeline(config, dataset, PIPELINE_NAME)
+    distiset, cost_tracker = run_pipeline(config, dataset)
     print(f"Cost: {dict(cost_tracker)}")
     distiset = distiset['default']['train']
 
@@ -99,11 +169,11 @@ if __name__ == '__main__':
         convert_to_vision,
         path_substitution=config.path_substitution,
         cols_to_keep=['answer_model_name', 'split'], 
-        n_workers=16,
+        n_workers=4,
     )
 
-    distiset = distiset.shuffle(seed=0)
-    mt = distiset.select(range(200))
-    mt.save_to_disk(CACHE_DIR / 'for_multi_turn' / 'reasoning_vds')
-    distiset = distiset.select(range(200, len(distiset)))
-    distiset.save_to_disk(CACHE_DIR / 'reasoning_vds')
+    # distiset = distiset.shuffle(seed=0)
+    # mt = distiset.select(range(200))
+    # mt.save_to_disk(CACHE_DIR / 'for_multi_turn' / 'visual_reasoning_vds')
+    # distiset = distiset.select(range(200, len(distiset)))
+    distiset.save_to_disk(CACHE_DIR / 'visual_reasoning_vds')

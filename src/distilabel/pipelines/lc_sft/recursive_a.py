@@ -29,4 +29,9 @@ if __name__ == '__main__':
         n_workers=16,
     )
 
-    distiset.save_to_disk(CACHE_DIR / 'recursive_vds')
+    recursive = distiset.filter(utils.hf_batched(lambda row: 'recursive' in row['split']), batched=True)
+    recursive.save_to_disk(CACHE_DIR / 'recursive_vds')
+    # sp = distiset.filter(utils.hf_batched(lambda row: 'sp' in row['split']), batched=True)
+    # sp.save_to_disk(CACHE_DIR / 'recursive_sp_vds')
+    # mp = distiset.filter(utils.hf_batched(lambda row: 'mp' in row['split']), batched=True)
+    # mp.save_to_disk(CACHE_DIR / 'recursive_mp_vds')

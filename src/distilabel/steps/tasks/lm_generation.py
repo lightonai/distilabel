@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Callable, Annotated, List, Dict, Any, Union
+from typing import TYPE_CHECKING, Callable, Annotated, get_origin, get_args
 from functools import partial
 from pydantic import Field, model_validator
 
@@ -27,6 +27,7 @@ class LMGenerationTask(Task):
     Args:
     ---
         system_col: column to use for the system prompt, if specified, replaces sampling from the lm_config.system_template_path
+        if 'default_system', no system prompt will be added to the messages (uses model default)
         lm_input_cols: extra columns to include in the messages to the LM, postfixed in order 
         lm_input_col_prefixes: prefixes to prepend to the lm_input_cols (e.g. 'reference answer: ')
         extra_cols: extra columns for the step to know about for input or output mappings
@@ -64,6 +65,24 @@ class LMGenerationTask(Task):
         return list(self.lm_config.out_model.model_fields.keys())
 
     @property
+    def none_allowed_fields(self) -> list[str]:
+        if self.lm_config.out_model is None:
+            return []
+        fields_allowing_none: list[str] = []
+        for name, field in self.lm_config.out_model.model_fields.items():
+            # unwrap Annotated types
+            underlying = field.annotation
+            while get_origin(underlying) is Annotated:
+                args = get_args(underlying)
+                if not args:
+                    break
+                underlying = args[0]
+            # if NoneType is part of the union args, then the field accepts None
+            if type(None) in get_args(underlying):
+                fields_allowing_none.append(name)
+        return fields_allowing_none
+
+    @property
     def inputs(self) -> 'StepColumns':
         return ['source'] + self.lm_input_cols + self.extra_cols
 
@@ -92,7 +111,14 @@ class LMGenerationTask(Task):
 
     def process(self, inputs: StepInput) -> "StepOutput":  # type: ignore
         results = next(super().process(inputs))
-        n_failed = sum(1 for result in results if any(result[k] is None for k in self.pydantic_fields if k != 'reasoning'))
+        n_failed = sum(
+            1 for result in results if 
+            any(result[k] is None for k in self.pydantic_fields 
+            if (k != 'reasoning' and k not in self.none_allowed_fields))
+        )
         if n_failed > int(0.1 * len(results)):
-            self._logger.warning(f"{n_failed}/{len(results)} outputs have None values in the output fields {self.pydantic_fields} which is more than 10% of the batch")
+            valued_fields = [f for f in self.pydantic_fields if f not in self.none_allowed_fields]
+            self._logger.warning(
+                f"{n_failed}/{len(results)} outputs have None values in the output fields "
+                f"{valued_fields} which is more than 10% of the batch")
         yield results

@@ -1,5 +1,5 @@
 import os
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 from functools import partial
 import io
 import hashlib
@@ -22,9 +22,10 @@ import pypdfium2 as pdfium
 import multiprocessing as mp
 from tqdm import tqdm
 from collections import defaultdict
+import numpy as np
 
 from .cpe import continuous_parallel_execution
-from .image import get_image, downsample_image, b64_encode_image
+from .image import get_image, downsample_image, b64_encode_image, crop_image
 
 # Cache filename for idx→filename maps
 IDX_TO_FILENAME_CACHE = 'idx_to_filename.json'
@@ -390,17 +391,84 @@ def is_openai_model_name(model_name: str) -> bool:
         return False
     return bool(re.search(r'(gpt|o\d.*)', model_name, re.IGNORECASE))
 
+def _is_image_path(s: str) -> bool:
+    extensions = ['.pdf', '.jpg', '.png']
+    return any(s.endswith(ext) for ext in extensions)
+
+def add_index_badge_to_image(
+    img: Image.Image,
+    idx: int,
+    source: Any,
+    color: str | tuple[int, int, int] = 'red',
+    alpha: int = 192,
+    font_path: str | None = None,
+    font_size_ratio: float = 0.04,
+    padding_ratio: float = 0.02,
+) -> Image.Image:
+    """Overlay a prominent index number at the top-left of the image.
+
+    The overlay is drawn on the downsampled image for consistent sizing.
+    Use partials to customize color/font_path.
+    """
+    # mostly remove page numbers from the image
+    img = crop_image(img, {'top': 0.08, 'bottom': 0.08, 'left': 0, 'right': 0})
+
+    if img.mode != 'RGBA':
+        base = img.convert('RGBA')
+    else:
+        base = img
+
+    width, height = base.size
+    # Scale elements relative to shorter side
+    shorter_side = min(width, height)
+    font_size = max(18, int(shorter_side * font_size_ratio))
+    padding = max(6, int(shorter_side * padding_ratio))
+
+    # Choose font: prefer provided TTF path if it exists; else default bitmap font
+    font: ImageFont.ImageFont
+    if font_path is not None and Path(font_path).exists():
+        font = ImageFont.truetype(font_path, font_size)
+    else:
+        font = ImageFont.load_default(size=font_size)
+
+    text = str(idx + 1)
+
+    overlay = Image.new('RGBA', base.size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+
+    # Determine text position and bounding box at that position
+    text_pos = (padding, padding)
+    text_bbox = draw.textbbox(text_pos, text, font=font)
+
+    # Expand bbox by padding to form the background rectangle
+    bg_rect = (
+        text_bbox[0] - padding,
+        text_bbox[1] - padding,
+        text_bbox[2] + padding,
+        text_bbox[3] + padding,
+    )
+    draw.rectangle(bg_rect, fill=(0, 0, 0, alpha))
+
+    # Draw the text on top
+    draw.text(text_pos, text, font=font, fill=color)
+
+    composed = Image.alpha_composite(base, overlay)
+    return composed.convert('RGB')
+
 def source_to_msg(
     source: str | list[str | Image.Image] | None, 
     max_dims: tuple[int, int], 
     msg_content_img: Callable,
     path_substitution: tuple[str, str] | None = None,
+    postprocess_image_hook: Callable[[Image.Image, int, Any], Image.Image] | None = None,
     pdf_backend: str = "pdfium",
 ) -> dict:
     '''
     Convert a source into an openai message.
     
-    A source is a string directly for input, or a list of either paths to images or pdf pages or direct PIL Images.
+    A source is a string directly for input, 
+    a list of strings, a list of either paths to images or pdf pages, 
+    or direct PIL Images.
     '''
     if isinstance(source, str):
         # Text source
@@ -408,7 +476,10 @@ def source_to_msg(
     elif isinstance(source, list):
         # Image source (list of paths)
         content = []
-        for item in source:
+        for idx, item in enumerate(source):
+            if isinstance(item, str) and not _is_image_path(item):
+                content.append({'type': 'text', 'text': item})
+                continue
             if isinstance(item, str):
                 img = get_image(None, item, path_substitution, pdf_backend)
             elif isinstance(item, Image.Image):
@@ -416,6 +487,8 @@ def source_to_msg(
             else:
                 continue
             img = downsample_image(img, max_dims)
+            if postprocess_image_hook is not None:
+                img = postprocess_image_hook(img, idx, source)
             b64_img = b64_encode_image(img)
             content.append(msg_content_img(b64_img))
             
@@ -627,6 +700,19 @@ def remove_pdfs_with_pages_(
         num_proc=num_proc,
     )
 
+def take_first_doc_occurrence(dataset: Dataset, _resolve_path: Callable = lambda x: x) -> Dataset:
+    docs_used = set()
+    ifns = dataset['image_filename']
+    pruned_ds = []
+    for idx, ifn in enumerate(ifns):
+        pdf_path = pdf_name(_resolve_path(ifn))
+        if pdf_path in docs_used:
+            continue
+        docs_used.add(pdf_path)
+        pruned_ds.append(idx)
+    dataset = dataset.select(pruned_ds).flatten_indices()
+    return dataset
+
 fn_to_idx: dict[str, int] | None = None
 
 def default_conversion_fn(row: dict, path_substitution: tuple[str, str] | None = None, **kwargs) -> dict:
@@ -706,3 +792,167 @@ def format_distiset(
 
     distiset = Dataset.from_list(vision_ds).select_columns(list(set(['images', 'messages', 'n_images'] + cols_to_keep)))
     return distiset
+
+def sample_match_target_histogram(
+    n_images: np.ndarray,
+    min_total_images: int,
+    bin_edges: np.ndarray,
+    target_bin_probs: np.ndarray,
+    *,
+    seed: int = 17,
+    allow_replacement_long_bins: bool = False,
+    max_examples: int | None = None,
+) -> np.ndarray:
+    """Select example indices to match a target n_images distribution with a
+    minimum total images constraint.
+
+    Parameters
+    ----------
+    n_images : np.ndarray
+        Per-example number of images (ints). Shape: (N,).
+    min_total_images : int
+        Minimum total number of images the selected subset should sum to.
+    bin_edges : np.ndarray
+        Monotonic array of bin edges for ``np.digitize``; length = B+1.
+    target_bin_probs : np.ndarray
+        Desired probability mass per bin; length = B. Non-negative. Will be
+        normalized over non-empty bins.
+    seed : int, optional
+        RNG seed.
+    allow_replacement_long_bins : bool, optional
+        If True, bins may sample with replacement when requested count exceeds
+        capacity; otherwise counts are capped by capacity.
+    max_examples : int | None, optional
+        If provided, cap the total number of selected examples (may make it
+        impossible to reach ``min_total_images`` without replacement).
+
+    Returns
+    -------
+    np.ndarray
+        Selected example indices (dtype=int) shuffled.
+
+    Example
+    -------
+    bin_edges = np.array([0, 4, 8, 16, 32, 64, 128, 192, 256, 336, 10_000], dtype=int)  # last edge large to cap
+    target_probs = np.array([1, 1, 1, 1, 1, 5, 5, 5, 5, 0], dtype=float)
+    sel_idxs = sample_match_target_histogram(
+        n_images=n_images, 
+        min_total_images=100, 
+        bin_edges=bin_edges, 
+        target_bin_probs=target_probs,
+    )
+    """
+    # overall process is: 
+    #   Loop until we have enough images (estimated based on average images per bin and current example counts per bin)
+        #   estimate the gain n_images per sampled example by probs * avg_images_per_bin
+        #   estimate a number of examples to take from the bins as (min_total_images - current_images) / expected_gain_per_example
+        #   sample that many examples from the bins according to target_probs
+        #   add the selected examples to the current examples
+        #   repeat until we have enough images
+    #   We only have a number of examples to take from each bin, sample these from each
+    #   Shuffle and return the selected idxs
+
+    if n_images.ndim != 1:
+        raise ValueError("n_images must be a 1D array")
+    if len(bin_edges) < 2:
+        raise ValueError("bin_edges must have at least two values")
+    if len(target_bin_probs) != len(bin_edges) - 1:
+        raise ValueError("target_bin_probs must be len(bin_edges) - 1")
+    if np.any(np.asarray(target_bin_probs) < 0):
+        raise ValueError("target_bin_probs must be non-negative")
+    
+
+    rng = np.random.default_rng(seed)
+    num_examples = int(n_images.shape[0])
+    if num_examples == 0 or min_total_images <= 0:
+        return np.array([], dtype=int)
+
+    # Bin assignments and capacities
+    num_bins = len(bin_edges) - 1
+    bin_ids = np.clip(np.digitize(n_images, bin_edges, right=True) - 1, 0, num_bins - 1)
+    bin_to_indices: list[np.ndarray] = [np.where(bin_ids == b)[0] for b in range(num_bins)]
+    capacity_per_bin = np.array([idxs.size for idxs in bin_to_indices], dtype=int)
+    non_empty_mask = capacity_per_bin > 0
+    if not np.any(non_empty_mask):
+        raise ValueError("All bins are empty after binning; check bin_edges.")
+
+    # Normalize target probabilities over non-empty bins
+    probabilities = np.asarray(target_bin_probs, dtype=float).copy()
+    probabilities[~non_empty_mask] = 0.0
+    prob_sum = float(probabilities.sum())
+    if prob_sum <= 0.0:
+        raise ValueError("Target probabilities sum to zero over non-empty bins.")
+    probabilities /= prob_sum
+
+    # Average images per bin
+    avg_images_per_bin = np.array([
+        float(n_images[idxs].mean()) if idxs.size > 0 else 0.0 for idxs in bin_to_indices
+    ], dtype=float)
+
+    # Preserve previous behavior: raise if no expected images under target
+    if float((probabilities * avg_images_per_bin).sum()) <= 0.0:
+        raise ValueError("Expected images per sample is zero; check probs/binning.")
+
+    counts_per_bin = np.zeros(num_bins, dtype=int)
+    max_total_examples = int(max_examples) if max_examples is not None else np.iinfo(np.int64).max
+    if not allow_replacement_long_bins:
+        max_total_examples = min(max_total_examples, int(capacity_per_bin.sum()))
+
+    # Allocate counts in batches until reaching the image budget or capacity
+    while True:
+        current_images = float((counts_per_bin * avg_images_per_bin).sum())
+        if current_images >= float(min_total_images):
+            break
+
+        if allow_replacement_long_bins:
+            available_bins = np.arange(num_bins)
+            active_probabilities = probabilities
+            remaining_slots = int(max_total_examples - counts_per_bin.sum())
+            if remaining_slots <= 0:
+                break
+            expected_per_increment = float((active_probabilities * avg_images_per_bin).sum())
+        else:
+            spare_capacity = capacity_per_bin - counts_per_bin
+            available_bins = np.where(spare_capacity > 0)[0]
+            if available_bins.size == 0:
+                break
+            active_probabilities = probabilities[available_bins]
+            s = float(active_probabilities.sum())
+            active_probabilities = active_probabilities / s if s > 0 else np.ones_like(active_probabilities) / active_probabilities.size
+            remaining_slots = int(min(spare_capacity[available_bins].sum(), max_total_examples - counts_per_bin.sum()))
+            if remaining_slots <= 0:
+                break
+            expected_per_increment = float((active_probabilities * avg_images_per_bin[available_bins]).sum())
+
+        if expected_per_increment <= 0.0:
+            break
+        images_needed = float(min_total_images - current_images)
+        increment_count = int(np.ceil(images_needed / expected_per_increment))
+        increment_count = max(0, min(increment_count, remaining_slots))
+        if increment_count == 0:
+            break
+
+        if allow_replacement_long_bins:
+            add_counts = rng.multinomial(increment_count, active_probabilities)
+            counts_per_bin = counts_per_bin + add_counts
+        else:
+            add_local = rng.multinomial(increment_count, active_probabilities)
+            add_global = np.zeros_like(counts_per_bin)
+            add_global[available_bins] = np.minimum(add_local, spare_capacity[available_bins])
+            counts_per_bin = counts_per_bin + add_global
+
+    # Sample indices within each bin
+    if counts_per_bin.sum() <= 0:
+        return np.array([], dtype=int)
+    selected_parts: list[np.ndarray] = []
+    for b in range(num_bins):
+        cnt = int(counts_per_bin[b])
+        if cnt <= 0:
+            continue
+        idxs = bin_to_indices[b]
+        replace_flag = bool(allow_replacement_long_bins and cnt > idxs.size)
+        chosen = rng.choice(idxs, size=cnt, replace=replace_flag)
+        selected_parts.append(chosen.astype(int, copy=False))
+
+    selection = np.concatenate(selected_parts, axis=0) if selected_parts else np.array([], dtype=int)
+    return rng.choice(selection, size=len(selection), replace=False)

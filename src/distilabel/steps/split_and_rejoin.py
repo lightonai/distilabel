@@ -132,8 +132,10 @@ class Rejoin(GlobalStep):
                     else:
                         merged[key] = vals
                 rejoined_rows.append(merged)
+            len_before = len(rejoined_rows)
             if self.drop_incomplete_rows:
-                rejoined_rows = rejoined_rows = self.drop_incomplete(rejoined_rows)
+                rejoined_rows = self.drop_incomplete(rejoined_rows)
+                self._logger.warning(f"Dropped {len_before - len(rejoined_rows)} / {len_before} rows that were incomplete in {self.name}")
             # Remove the len_before_split column as it's no longer needed
             for row in rejoined_rows:
                 row.pop(f'{self.input_col}_len_before_split', None)

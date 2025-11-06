@@ -81,11 +81,11 @@ EXCLUDE_PDFS = set(Path('/mnt/nfs/austin_shared/mp_data_gen/bench_pdfs.txt').rea
 DS_PATH = Path('/mnt/nfs/austin_shared/data/scraped_and_pdfa')
 IMAGES_DS_PATH = Path('/mnt/nfs/austin_shared/data/all_pdfs_images_ds')
 PDF_ROOT = Path('/mnt/nfs/pdfs')
-CACHE_DIR = Path('/mnt/nfs/austin_shared/mp_data_gen/distilabel/out/lc_sft')
-AVAILABLE_GPUS = [0, 1, 2, 3]
+CACHE_DIR = Path('/mnt/nfs/austin_shared/mp_data_gen/distilabel/out/lc_sft/prompt_sampler_fixed')
+AVAILABLE_GPUS = [0, 1, 2, 3, 4, 5, 6, 7]
 PATH_SUBSTITUTION = ('/lustre/fsn1/projects/rech/eya/uzj46do/pdfs/', '/mnt/nfs/pdfs/')
 
-PIPELINE_NAME = 'single_page_q_v0'
+PIPELINE_NAME = 'single_page_q_v1'
 
 def get_lm_config(
     path: str, 
@@ -105,7 +105,7 @@ def get_lm_config(
         tp_size=gpu_mesh[1],
         replicas_per_vllm_server=gpu_mesh[2],
         vllm_kwargs={
-            'limit-mm-per-prompt': "'{\"image\": 1}'",
+            'limit-mm-per-prompt': "'{\"image\": 1, \"video\": 0}'",
             'quantization': 'fp8',
             'max-model-len': '32768',
             'gpu-memory-utilization': 0.9,
@@ -120,9 +120,9 @@ stages = [
         lm_configs=[ # 72b, 32b, gpt-5-nano, gemini-2.5-flash-lite
             get_lm_config('Qwen/Qwen2.5-VL-72B-Instruct', data_ratio=1.0, gpu_mesh=(2, 2, 2)),
             get_lm_config('Qwen/Qwen2.5-VL-32B-Instruct', data_ratio=1.0, gpu_mesh=(4, 1, 2)),
-            # get_lm_config('gpt-5-nano', data_ratio=0.5, gpu_mesh=(1, None)),
             get_lm_config('gemini-2.5-flash-lite', data_ratio=1.0, gpu_mesh=(1, None, 1)),
             get_lm_config('gemini-2.5-flash', data_ratio=1.0, gpu_mesh=(1, None, 1)),
+            # get_lm_config('gemini-2.5-pro', data_ratio=1.0, gpu_mesh=(1, None, 1)),
         ],
         available_gpus=AVAILABLE_GPUS,
         max_dims=(1000, 1000),

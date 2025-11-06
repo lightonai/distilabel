@@ -58,7 +58,7 @@ def run_pipeline(config: Config):
         generate_answers = [
             LMGenerationTask(
                 use_cache=True,
-                invalidate_cache=True,
+                # invalidate_cache=True,
                 name=f"answer_generation_{i}",
                 stage=stage,
                 llm=lm,
@@ -106,7 +106,7 @@ if __name__ == '__main__':
         images_ds_path=IMAGES_DS_PATH,
         path_substitution=config.path_substitution,
         cols_to_keep=['answer_model_name', 'split'], 
-        n_workers=16,
+        n_workers=1,
     )
 
     distiset.save_to_disk(CACHE_DIR / 'true_multi_page_short_vds')

@@ -18,7 +18,7 @@ question_prompt_sampler_config = PromptSamplerConfig(
     samples_per_prompt_kwarg='n_questions',
     distributions={
         # one of the ways to reduce the cost of this pipeline is to sample more questions
-        'n_questions': CategoricalDist(choices=[(str(i), min(i, 5)) for i in range(1, 6+1)]),
+        'n_questions': CategoricalDist(choices=[(str(i), min(i, 5)) for i in range(1, 4+1)]),
         'additional_visual_question': CategoricalDist(choices=[
             ('For the last of your questions, ask a question targeting tables, graphs, charts, diagrams or other visual elements, this should challenge the model to the utmost at precisely reading table rows, columns, specific values or sets of values, performing math operations, computing related mathematical/financial values, reasoning about the table data, reading elements from graphs, charts, diagrams, etc., extrapolating or interpolating graphs and charts, performing calculations based on graphs/charts/etc., answering questions conditional on values in one graph or table using values from another (e.g. what is the Q2 performance of the company with the highest Q1 performance in table/chart 12?), finding visual elements related to a specific topic, tracking/counting/finding entities from multiple pages and more. Be creative and come up with new types of questions that put the model to the test and for all of these: ESPECIALLY DOING THIS ACROSS MULTIPLE PAGES. (if no visual elements are present, this additional question should be an empty string)', 1),
             ('', 1),
@@ -30,11 +30,11 @@ EXCLUDE_PDFS = set(Path('/mnt/nfs/austin_shared/mp_data_gen/bench_pdfs.txt').rea
 DS_PATH = Path('/mnt/nfs/austin_shared/data/scraped_and_pdfa')
 IMAGES_DS_PATH = Path('/mnt/nfs/austin_shared/data/all_pdfs_images_ds')
 PDF_ROOT = Path('/mnt/nfs/pdfs')
-CACHE_DIR = Path('/mnt/nfs/austin_shared/mp_data_gen/distilabel/out/lc_sft')
-AVAILABLE_GPUS = [0, 1, 2, 3]
+CACHE_DIR = Path('/mnt/nfs/austin_shared/mp_data_gen/distilabel/out/lc_sft/prompt_sampler_fixed')
+AVAILABLE_GPUS = [0, 1, 2, 3, 4, 5, 6, 7]
 PATH_SUBSTITUTION = ('/lustre/fsn1/projects/rech/eya/uzj46do/pdfs/', '/mnt/nfs/pdfs/')
 
-PIPELINE_NAME = 'true_multi_page_q_v0'
+PIPELINE_NAME = 'true_multi_page_q_v1'
 
 def question_generation_lm_config(
     path: str,
@@ -54,7 +54,7 @@ def question_generation_lm_config(
         tp_size=gpu_mesh[1],
         replicas_per_vllm_server=gpu_mesh[2],
         vllm_kwargs={
-            'limit-mm-per-prompt': "'{\"image\": 10}'",
+            'limit-mm-per-prompt': "'{\"image\": 10, \"video\": 0}'",
             'max-model-len': '32768',
             'gpu-memory-utilization': 0.9,
             'quantization': 'fp8',
@@ -82,11 +82,11 @@ def judge_answers_lm_config(
         tp_size=gpu_mesh[1],
         replicas_per_vllm_server=gpu_mesh[2],
         vllm_kwargs={
-            'limit-mm-per-prompt': "'{\"image\": 0}'",
+            'limit-mm-per-prompt': "'{\"image\": 0, \"video\": 0}'",
             'max-model-len': '32768',
             'gpu-memory-utilization': 0.9,
             'quantization': 'fp8',
-            'max-num-seqs': '64',
+            # 'max-num-seqs': '64',
         },
         out_model='SatisfactoryAnswer',
         system_template_path='distilabel/prompts/satisfied_user.txt',
@@ -100,9 +100,9 @@ stages = [
         lm_configs=[
             # 72b, gpt-5-nano, gemini-2.5-flash-lite
             question_generation_lm_config('Qwen/Qwen2.5-VL-72B-Instruct', data_ratio=1.0, gpu_mesh=(4, 2, 2)),
-            # question_generation_lm_config('gpt-5-nano', data_ratio=1.0, gpu_mesh=(1, None)),
             question_generation_lm_config('gemini-2.5-flash-lite', data_ratio=0.5, gpu_mesh=(1, None, 1)),
             question_generation_lm_config('gemini-2.5-flash', data_ratio=0.5, gpu_mesh=(1, None, 1)),
+            # question_generation_lm_config('gemini-2.5-pro', data_ratio=1.0, gpu_mesh=(1, None, 1)),
         ],
         available_gpus=AVAILABLE_GPUS,
         max_dims=(1000, 1000),
@@ -120,10 +120,10 @@ stages = [
                 temperature=0.2,
                 max_new_tokens=4096,
                 tp_size=1,
-                replicas=6,
+                replicas=8,
                 replicas_per_vllm_server=2,
                 vllm_kwargs={
-                    'limit-mm-per-prompt': "'{\"image\": 1}'",
+                    'limit-mm-per-prompt': "'{\"image\": 1, \"video\": 0}'",
                     'max-model-len': '32768',
                     'gpu-memory-utilization': 0.9,
                     'quantization': 'fp8',
@@ -157,7 +157,7 @@ stages = [
                 task_name='question_requirements',
                 temperature=0.7,
                 max_new_tokens=16384,
-                tp_size=1,
+                tp_size=None,
                 replicas=2,
                 replicas_per_vllm_server=2,
                 vllm_kwargs={
@@ -178,9 +178,9 @@ stages = [
     Stage(
         lm_configs=[
             # gpt-5-mini, gemini-2.5-flash, 72b
-            judge_answers_lm_config('Qwen/Qwen2.5-VL-72B-Instruct', data_ratio=2.0, gpu_mesh=(4, 2, 2)),
-            # judge_answers_lm_config('gpt-5-nano', data_ratio=1.0, gpu_mesh=(1, None, 1)),
+            judge_answers_lm_config('Qwen/Qwen2.5-VL-72B-Instruct', data_ratio=2.0, gpu_mesh=(8, 2, 2)),
             judge_answers_lm_config('gemini-2.5-flash-lite', data_ratio=1.0, gpu_mesh=(1, None, 1)),
+            judge_answers_lm_config('gemini-2.5-flash', data_ratio=1.0, gpu_mesh=(1, None, 1)),
             # judge_answers_lm_config('Qwen/Qwen3-30B-A3B-Instruct-2507-FP8', data_ratio=2.0, gpu_mesh=(1, 1, 1)),
         ],
         available_gpus=AVAILABLE_GPUS,

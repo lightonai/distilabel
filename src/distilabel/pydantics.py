@@ -1,7 +1,8 @@
 from pydantic import BaseModel, model_validator, Field
 from pathlib import Path as pth
 import sys
-from typing import Any, Literal
+from typing import Any, Literal, Callable
+from PIL import Image as PILImage
 
 from distilabel import utils
 
@@ -81,6 +82,10 @@ class LMConfig(BaseModel):
 
     _path_substitution: tuple[str, str] | None = None
     '''set by the config'''
+
+    postprocess_image_hook: Callable[[PILImage, int, Any], PILImage] | None = None
+    '''Optional hook applied to each image loaded in utils.source_to_msg.
+    Signature: (img: PIL.Image.Image, idx: int, source: Any) -> PIL.Image.Image'''
 
     def model_post_init(self, context) -> None:
         if isinstance(self.out_model, str):
@@ -203,8 +208,38 @@ class EvidenceInChunks(BaseModel):
 
 class UnanswerableQA(BaseModel):
     analysis: str
+    answerable_question: str
     question: str
     answer: str
+
+class CheckAnswerLanguage(BaseModel):
+    analysis: str
+    answer_language_matches_question_language: bool
+
+class AnswerToClaims(BaseModel):
+    answer_claims: list[str]
+
+class PageFactCheck(BaseModel):
+    analysis: str
+    claims_supported: list[bool]
+    low_quality: bool
+
+class CheckClaims(BaseModel):
+    analysis: str
+    claims_supported: list[bool]
+    corrected_answer: str | None
+
+class CheckClaimsMMLongDoc(BaseModel):
+    analysis: str
+    claims_supported: list[bool]
+    corrected_question: str | None
+    corrected_answer: str | int | float | list | None
+    @model_validator(mode='after')
+    def cast_answer_to_str(self) -> 'CheckClaimsMMLongDoc':
+        if not isinstance(self.corrected_answer, (str, type(None))):
+            self.corrected_answer = str(self.corrected_answer)
+        return self
+
 
 class Persona(CoT):
     persona: str

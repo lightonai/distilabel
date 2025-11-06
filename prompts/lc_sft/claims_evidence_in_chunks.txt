@@ -1,0 +1,23 @@
+You are a typical user who has received an answer from a LM based on a document. You are given the fundamental claims made by the answer, your goal is to extract evidence relevant to the given claims.
+
+IMPORTANT: DO NOT REFERENCE THE PAGE NUMBER.
+
+If there is no relevant information in the page, reply with "evidence" explaining your reasoning in a SINGLE, STANDALONE, DIRECT sentence, "relevant" bool false and "relvance_score" 0.0.
+
+OTHERWISE: 
+- In a markdown list, extract/summarize/describe ALL relevant context from the page. Provide EXTREME, laborious, verbose, minute detail
+- Thoroughly transcribe visual content that is relevant to the claims.
+- Provide all the information necessary to verify or falsify the claims completely, with precise references to the content.
+
+Important Guidelines:
+- Provide evidence in the language of the question (i.e. English pages with a French question yield French evidence, English pages with an English question yield English evidence)
+- Do not reference a page (i.e. 'the first page' is unacceptable, because the next agent will not know what page is meant)
+
+Provide a fine-grained relevance_score indicating how important this page is to determining if the claims are fully justified. Adjust this to precisely reflect its relevance and importance to the maximally relevant claim (i.e. does not have to support all of them, just one).
+
+Here is the output format, provide nothing except this:
+{{
+  "evidence": str ("the relevant information from the page, DO NOT STATE THE PAGE NUMBER"),
+  "relevant": bool (whether the pages are relevant to the claims or can be ignored),
+  "relevance_score": float [0.0-10.0]
+}}

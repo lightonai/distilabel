@@ -36,9 +36,10 @@ def _format_one_input(args) -> 'ChatType':
         path_substitution,
         max_dims,
         msg_content_img_func,
+        postprocess_image_hook,
         logger,
     ) = args
-    messages = [{'role': 'system', 'content': system_prompt}]
+    messages = [] if system_prompt == 'default_system' else [{'role': 'system', 'content': system_prompt}]
 
     if not all(input.get(col) is not None for col in lm_input_cols + ['source']):
         # some assurance that the values we want to use exist in input
@@ -57,6 +58,7 @@ def _format_one_input(args) -> 'ChatType':
                 max_dims, 
                 msg_content_img_func, 
                 path_substitution,
+                postprocess_image_hook,
                 'pdf2image',
             )
         )
@@ -73,6 +75,7 @@ def _format_one_input(args) -> 'ChatType':
                 max_dims, 
                 msg_content_img_func, 
                 path_substitution,
+                postprocess_image_hook,
                 'pdf2image',
             )
             if isinstance(message['content'], str):
@@ -106,9 +109,14 @@ class VLM:
     _executor: "ProcessPoolExecutor | None" = PrivateAttr(default=None)
 
     def format_input(self, input: dict, system_col: str | None, lm_input_cols: list[str], lm_input_col_prefixes: list[str]) -> 'ChatType':
-        system = self.prompt_sampler.generate_prompt(
-            seed=utils.hash_structure_with_images(input)
-        ) if system_col is None else input[system_col]
+        if system_col == 'default_system':
+            system = 'default_system'
+        elif system_col is None:
+            system = self.prompt_sampler.generate_prompt(
+                seed=utils.hash_structure_with_images(input)
+            )
+        else:
+            system = input[system_col]
         input |= {'system': system}  # inplace update the input to sneak it into the format_output of LMGenerationTask
         return _format_one_input((
             input,
@@ -118,6 +126,7 @@ class VLM:
             self.lm_config._path_substitution,
             self.stage.max_dims,
             VLM.msg_content_img,
+            self.lm_config.postprocess_image_hook,
             self._vlm_logger,
         ))
 
@@ -131,11 +140,14 @@ class VLM:
         '''
         Format input serially is a big bottleneck due probably to image loading. Parallelizing this is great for throughput.
         '''
-        prompts = [
-            self.prompt_sampler.generate_prompt(seed=utils.hash_structure_with_images(input)) 
-            if system_col is None else inputs[i][system_col] 
-            for i in range(len(inputs))
-        ]
+        if system_col == 'default_system':
+            prompts = ['default_system'] * len(inputs)
+        else:
+            prompts = [
+                self.prompt_sampler.generate_prompt(seed=utils.hash_structure_with_images(inputs[i])) 
+                if system_col is None else inputs[i][system_col] 
+                for i in range(len(inputs))
+            ]
         for inp, system in zip(inputs, prompts):
             inp |= {'system': system}  # inplace update the input to sneak it into the format_output of LMGenerationTask
         
@@ -148,6 +160,7 @@ class VLM:
                 self.lm_config._path_substitution,
                 self.stage.max_dims,
                 VLM.msg_content_img,
+                self.lm_config.postprocess_image_hook,
                 self._vlm_logger
             )
             for input_data, system_prompt in zip(inputs, prompts)
@@ -343,6 +356,8 @@ def structured_output(agenerate: Callable) -> Callable:
                 generate_output['statistics']['input_tokens'] = [input_toks]
                 generate_output['statistics']['output_tokens'] = [output_toks]
                 return generate_output
+            except openai.APIConnectionError as e:
+                raise e
             except Exception as e:
                 format_exc = e
                 continue
@@ -362,7 +377,7 @@ class OpenAILM(OpenAILLM, CudaDevicePlacementMixin, VLLMServerPlacementMixin, VL
     
     OpenAI is the default client
 
-    vLLM is supported by setting use_vllm=True in the model config
+    vLLM is supported by using a model path that is not recognized as proprietary
 
     Grok is supported with 'grok' in the model path
 
@@ -376,7 +391,7 @@ class OpenAILM(OpenAILLM, CudaDevicePlacementMixin, VLLMServerPlacementMixin, VL
     _vllm_api: vLLMAPI = PrivateAttr(None)
 
     def load(self):
-        # self.base_url = kwargs.get('base_url', None)
+        self._model_path = self.lm_config.path
 
         if utils.is_openai_model_name(self.lm_config.path):
             self.base_url = None
@@ -395,9 +410,10 @@ class OpenAILM(OpenAILLM, CudaDevicePlacementMixin, VLLMServerPlacementMixin, VL
 
             self._vllm_api = vLLMAPI(self.lm_config)
             self.base_url = f'http://localhost:{self._vllm_api.port}/v1'
-            # round robin distribute LLMs to vLLM servers listed in VLLM_BASE_URLS if using running vLLM
+            # round robin distribute LLMs to vLLM servers listed in VLLM_BASE_URLS_JSON if using running vLLM
             if self.use_running_vllm:
-                self.disable_vllm_server_placement = os.environ.get('VLLM_BASE_URLS') is None
+                # Enable placement only if VLLM_BASE_URLS_JSON is present
+                self.disable_vllm_server_placement = os.environ.get('VLLM_BASE_URLS_JSON') is None
                 VLLMServerPlacementMixin.load(self)
                 base_url = os.environ.get('VLLM_API_BASE_URL', 'http://localhost:8000')
                 self.base_url = f'{base_url}/v1'
@@ -484,7 +500,7 @@ class OpenAILM(OpenAILLM, CudaDevicePlacementMixin, VLLMServerPlacementMixin, VL
         if len(input) == 0 or len(input) == 1 and input[0]['content'] in [None, '']:  # nothing for lm to respond to
             return no_response
         
-        @retry(wait=wait_random_exponential(min=1, max=60), stop=stop_after_attempt(5), reraise=True, retry_error_callback=openai.RateLimitError)
+        @retry(wait=wait_random_exponential(min=1, max=60), stop=stop_after_attempt(5), reraise=True)
         async def _generate():
             completion = await self._aclient.chat.completions.create(
                 model=self.model_name,
@@ -492,14 +508,18 @@ class OpenAILM(OpenAILLM, CudaDevicePlacementMixin, VLLMServerPlacementMixin, VL
                 max_completion_tokens=max_new_tokens,
                 temperature=temperature,
                 extra_body=extra_body,
-                timeout=600,
+                timeout=1800,
             )
             return completion
         
         try:
             completion = await _generate()
+        except openai.APIConnectionError as e:
+            self._logger.warning(f"Failed to get client response, exception: {e}")
+            raise e
         except Exception as e:
             completion = None
+            self._logger.warning(f"Failed to get client response, exception: {e}")
         if completion is None:
             return no_response
         return self._generations_from_openai_completion(completion)

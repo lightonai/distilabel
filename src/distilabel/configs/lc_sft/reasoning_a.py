@@ -22,15 +22,15 @@ gpt_oss_prompt_sampler_config = PromptSamplerConfig(
 )
 
 EXCLUDE_PDFS = set(Path('/mnt/nfs/austin_shared/mp_data_gen/bench_pdfs.txt').read_text().splitlines())
-SP_DS_PATH = Path('/mnt/nfs/austin_shared/mp_data_gen/distilabel/out/lc_sft/single_page_q_ds')
-MP_DS_PATH = Path('/mnt/nfs/austin_shared/mp_data_gen/distilabel/out/lc_sft/true_multi_page_q_ds')
+CACHE_DIR = Path('/mnt/nfs/austin_shared/mp_data_gen/distilabel/out/lc_sft/prompt_sampler_fixed')
+SP_DS_PATH = Path(CACHE_DIR / 'single_page_q_ds')
+MP_DS_PATH = Path(CACHE_DIR / 'true_multi_page_q_ds')
 IMAGES_DS_PATH = Path('/mnt/nfs/austin_shared/data/all_pdfs_images_ds')
 PDF_ROOT = Path('/mnt/nfs/pdfs')
-CACHE_DIR = Path('/mnt/nfs/austin_shared/mp_data_gen/distilabel/out/lc_sft')
 AVAILABLE_GPUS = [0, 1, 2, 3, 4, 5, 6, 7]
 PATH_SUBSTITUTION = ('/lustre/fsn1/projects/rech/eya/uzj46do/pdfs/', '/mnt/nfs/pdfs/')
 
-PIPELINE_NAME = 'reasoning_a_v0'
+PIPELINE_NAME = 'reasoning_a_v1'
 
 stages = [
     # Stage 0: transcribe
@@ -42,15 +42,15 @@ stages = [
                 task_name='transcribe',
                 temperature=0.2,
                 max_new_tokens=4096,
-                replicas=8,
+                replicas=4,
                 tp_size=2,
                 replicas_per_vllm_server=2,
                 vllm_kwargs={
-                    'limit-mm-per-prompt': "'{\"image\": 1}'",
+                    'limit-mm-per-prompt': "'{\"image\": 1, \"video\": 0}'",
                     'max-model-len': '32768',
                     'gpu-memory-utilization': 0.9,
                     'quantization': 'fp8',
-                    'max-num-seqs': '96',
+                    # 'max-num-seqs': '96',
                 },
                 out_model=None,
                 system_template_path='distilabel/prompts/transcribe.txt',
@@ -71,7 +71,7 @@ stages = [
                 task_name='answer',
                 temperature=1.0,
                 max_new_tokens=65536,
-                replicas=8,
+                replicas=4,
                 tp_size=2,
                 replicas_per_vllm_server=2,
                 vllm_kwargs={
@@ -88,13 +88,14 @@ stages = [
                 task_name='answer',
                 temperature=1.0,
                 max_new_tokens=65536,
-                replicas=2,
+                replicas=4,
                 tp_size=4,
-                pp_size=2,
                 replicas_per_vllm_server=2,
                 vllm_kwargs={
-                    'gpu-memory-utilization': 0.9,
-                    'max-model-len': '220000',
+                    'gpu-memory-utilization': 0.91,
+                    'max-num-seqs': '128',
+                    'max-num-batched-tokens': '4096',
+                    'enable-expert-parallel': None,
                 },
                 out_model=None,
                 # system_template_path='distilabel/prompts/lc_sft/full_context_answer.txt',

@@ -60,17 +60,15 @@ import json
 SEED = 7439
 random.seed(SEED)
 
+STAGE = 0
+'''tracks the current stage of the pipeline'''
+BATCH_SIZE = 32
+
 def _resolve_path(path: str) -> str:
     return path.replace(config.path_substitution[0], config.path_substitution[1])
 
-def get_ds(n: int, seed: int) -> Dataset:
-    if (CACHE_DIR / 'multi_turn_input_ds').exists():
-        return load_from_disk(CACHE_DIR / 'multi_turn_input_ds')
-    num_proc = 1
-    ds = load_from_disk(DS_PATH)
-    ds = ds.shuffle(seed=seed)
-    n = min(n, len(ds))
-    ds = ds.select(range(n))
+def _select_raw_ds(dataset: Dataset, n: int, num_proc: int, offset: int = 0) -> Dataset:
+    ds = dataset.select(range(offset, offset + n))
     ds = ds.select_columns(['image_filename', 'hard_negs_idx_img_img', 'hard_negs_idx_txt_img'])
     ds = utils.remove_pdfs_with_pages_(
         ds,
@@ -81,6 +79,19 @@ def get_ds(n: int, seed: int) -> Dataset:
         num_proc=num_proc,
     )
     ds = ds.map(lambda x: {'source': [_resolve_path(x['image_filename'])]}, num_proc=num_proc)
+    return ds
+
+def get_ds(n_sp: int, n_mp: int, seed: int, allow_doc_reuse: bool = False) -> Dataset:
+    if (CACHE_DIR / 'multi_turn_input_ds').exists():
+        return load_from_disk(CACHE_DIR / 'multi_turn_input_ds')
+    num_proc = 1
+    ds = load_from_disk(DS_PATH)
+    ds = ds.shuffle(seed=seed)
+    if not allow_doc_reuse:
+        ds = utils.take_first_doc_occurrence(ds, _resolve_path)
+    n_mp = min(n_mp, len(ds))
+    ds = _select_raw_ds(ds, n_mp, num_proc, offset=0)
+    sp_ds = _select_raw_ds(ds, n_sp, num_proc, offset=n_mp)
 
     # just need to make various types of source combinations
     # hard negatives, adjacent pages or the whole doc
@@ -92,7 +103,7 @@ def get_ds(n: int, seed: int) -> Dataset:
         'doc',
     ]
     split_weights = [1, 1, 1, 3, 6]
-    split_sizes = [((i * n) // sum(split_weights)) for i in split_weights]
+    split_sizes = [((i * n_mp) // sum(split_weights)) for i in split_weights]
     fn_to_page_count = utils.count_all_pages(PDF_ROOT, CACHE_DIR)
     idx_to_ifn_images_ds = utils.get_idx_to_filename(IMAGES_DS_PATH)
     ds_dict = augment_into_splits(
@@ -103,7 +114,7 @@ def get_ds(n: int, seed: int) -> Dataset:
         idx_to_ifn_images_ds=idx_to_ifn_images_ds, 
         num_proc=num_proc,
     )
-    ds = concatenate_datasets(list(ds_dict.values()))
+    ds = concatenate_datasets(list(ds_dict.values()) + [sp_ds])
     # Exclude benchmark PDFs
     ds = utils.remove_pdfs_from_dataset(
         ds,
@@ -126,6 +137,7 @@ def _lm_generation_task(
     input_mappings: dict[str, str] = {},
     use_cache: bool = True,
     invalidate_cache: bool = False,
+    input_batch_size: int = BATCH_SIZE,
 ) -> LMGenerationTask:
     return LMGenerationTask(
         use_cache=use_cache,
@@ -139,7 +151,7 @@ def _lm_generation_task(
         lm_input_cols=lm_input_cols,
         lm_input_col_prefixes=lm_input_col_prefixes,
         extra_cols=extra_cols,
-        input_batch_size=BATCH_SIZE,
+        input_batch_size=input_batch_size,
         resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.n_gpus, oversubscribe=lm.lm_config.replicas_per_vllm_server),
         output_mappings=output_mappings,
         input_mappings=input_mappings,
@@ -239,16 +251,12 @@ def _map_to_conversation(question: str, answer: str, conversation: list[dict], *
     )
     return {'conversation': conversation}
 
-STAGE = 0
-'''tracks the current stage of the pipeline'''
-BATCH_SIZE = 256
-
 def run_pipeline(config: Config):
     global STAGE
     global BATCH_SIZE
     
     stages = config.stages
-    dataset = get_ds(20, SEED)
+    dataset = get_ds(n_sp=30, n_mp=270, seed=SEED)
 
     distiset = dataset
     cost_tracker = defaultdict(int)
@@ -263,7 +271,7 @@ def run_pipeline(config: Config):
             # ---------------------- Stage 0: Generate followup questions ----------------------
             STAGE = 0
             stage = stages[STAGE]
-            if loop_idx != 0:
+            if loop_idx >= 2:
                 # half of the conversations stop at their current number of turns every loop
                 selection = sorted(rng.sample(range(len(distiset)), k=len(distiset) // 2))
                 loop_distisets.append((
@@ -320,7 +328,7 @@ def run_pipeline(config: Config):
                 name='split_chunks',
                 input_col='source',
                 chunk_size=1,
-                input_batch_size=BATCH_SIZE,
+                input_batch_size=BATCH_SIZE * 8,
             )
 
             evidence_router = pipe_utils.data_router(
@@ -336,6 +344,7 @@ def run_pipeline(config: Config):
                     lm_input_cols=['question'],
                     lm_input_col_prefixes=['Given question: '],
                     output_mappings={'system': 'evidence_system', 'model_name': 'evidence_model_name'},
+                    input_batch_size=BATCH_SIZE * 8,
                 )
                 for i, lm in enumerate(lms)
             ]  # cols: ['source', 'question', ...] -> ['evidence', 'relevant', 'evidence_system', 'evidence_model_name', ...]
@@ -487,7 +496,7 @@ def convert_to_vision(row: dict, path_substitution: tuple[str, str] | None = Non
     global fn_to_idx
     image_indices = [fn_to_idx[ifn.replace(path_substitution[0], path_substitution[1])] for ifn in row['source']]
 
-    conversation = [{k: v for k, v in msg.items() if v is not None} for msg in row['conversation'] if 'pages' not in msg]
+    conversation = [{k: v for k, v in msg.items() if v is not None} for msg in row['conversation'] if msg.get('role') is not None]
     user_content = (
         ''.join([f'<IMG_{i}>' for i in range(len(image_indices))])
         + conversation[0]['content']
@@ -529,6 +538,9 @@ def _merge_metadata_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
         if key not in {'messages', 'images', 'n_images'}
     }
     for key in keys:
+        if all(isinstance(row[key], list) for row in rows):
+            metadata[key] = [v for row in rows for v in row[key] if key in row]
+            continue
         values = [row[key] for row in rows if key in row]
         if not values:
             continue
@@ -601,7 +613,7 @@ def _merge_different_source_rows(
     image_offset = 0
     unused_rows: list[dict[str, Any]] = []
 
-    max_n_images = rng.randint(5, 336)
+    max_n_images = rng.randint(180, 336)
     for row in shuffled_rows:
         if len(merged_images) + len(row['images']) > max_n_images:
             unused_rows.append(row)
@@ -651,7 +663,11 @@ def concatenate_conversations(
         return {'same_source': [], 'different_source': []}
 
     grouped_rows: dict[tuple[int, ...], list[dict[str, Any]]] = defaultdict(list)
-    for row in dataset.to_list():
+    for row in (
+        dataset.select_columns(
+            ['images', 'messages', 'n_images', 'answer_model_name', 'split']
+        ).to_list()
+    ):
         grouped_rows[tuple(row['images'])].append(row)
 
     rng = random.Random(seed)
@@ -664,6 +680,7 @@ def concatenate_conversations(
     single_occurrence_rows = [
         row
         for rows in grouped_rows.values()
+        for row in rows
         if len(rows) == 1
     ]
 
@@ -682,18 +699,19 @@ def concatenate_conversations(
     # Different-source combinations
     different_source_examples: list[dict[str, Any]] = []
     different_source_image_total = 0
-    if (len(aggregated_rows) + len(single_occurrence_rows)) >= 2:
-        diff_candidates = aggregated_rows + single_occurrence_rows
+    if len(single_occurrence_rows) >= 2:
+        diff_candidates = single_occurrence_rows
         rng.shuffle(diff_candidates)
         idx = 0
         step_size = MAX_TURNS
-        while idx + 1 < len(diff_candidates):
+        while idx + step_size < len(diff_candidates):
             chunk_rows = [deepcopy(row) for row in diff_candidates[idx: idx + step_size]]
             idx += step_size
 
             example, unused_rows = _merge_different_source_rows(chunk_rows, rng)
             diff_candidates.extend(unused_rows)
-            different_source_examples.append(example)
+            if example['messages']: # can be empty if random image threshold was too low
+                different_source_examples.append(example)
             different_source_image_total += example['n_images']
 
             if (
@@ -707,6 +725,107 @@ def concatenate_conversations(
         'different_source': Dataset.from_list(different_source_examples),
     }
 
+def _strip_think_tags(text: str) -> str:
+    # Remove <think>...</think> but keep outer text if present
+    # Simple, non-greedy removal; handles multiple occurrences
+    while True:
+        start = text.find("<think>")
+        if start == -1:
+            break
+        end = text.find("</think>", start)
+        if end == -1:
+            # unmatched; drop from start tag to end
+            text = text[:start]
+            break
+        # remove including closing tag
+        text = text[:start] + text[end + len("</think>"):]
+    return text.strip()
+
+
+def _map_content(content, fn):
+    if isinstance(content, list):
+        out = []
+        for seg in content:
+            if isinstance(seg, dict):
+                seg = dict(seg)
+                if "text" in seg:
+                    seg["text"] = fn(str(seg["text"]))
+                out.append(seg)
+            else:
+                out.append(fn(str(seg)))
+        return out
+    return fn(str(content))
+
+def _apply_control_tok_rules(row: dict, is_think: bool, control_token: str) -> list[dict]:
+    messages = row['messages']
+    end_ct = control_token.replace('<', '</')
+    if not is_think:
+        messages = [
+            msg | {'content': msg['content'].replace(control_token, '').replace(end_ct, '').strip()}
+            for msg in messages
+            if msg['role'] != 'system'
+        ]
+        row['messages'] = [
+            msg | {'content': _map_content(msg['content'], _strip_think_tags)}
+            for msg in messages
+        ]
+        return row
+
+    # Walk messages and enforce rules per turn
+    last_idx_missing_think = len(messages)
+    for idx, msg in enumerate(messages):
+        if msg['role'] == 'assistant' and "<think>" not in str(msg['content']):
+            last_idx_missing_think = idx
+
+    system_has_cot = False
+    cot_next_assistant = False
+    updated: list[dict] = []
+    for idx, m in enumerate(messages):
+        role = m.get("role")
+        content = m.get("content", "")
+        content_str = str(content)
+
+        if role == "system" and idx > last_idx_missing_think:
+            if control_token in content_str:
+                system_has_cot = True
+            updated.append(m)
+            continue
+        elif role == "system":
+            continue
+
+        if role == "user":
+            # User-level <cot> applies to next assistant only
+            if system_has_cot and control_token in content_str:
+                # Do not mix: remove user <cot> when system already has it
+                new_m = dict(m)
+                new_m["content"] = _map_content(content, lambda s: s.replace(control_token, "").strip())
+                updated.append(new_m)
+                cot_next_assistant = True
+            else:
+                cot_next_assistant = control_token in content_str or system_has_cot
+                updated.append(m)
+            continue
+
+        if role == "assistant":
+            if system_has_cot or cot_next_assistant:
+                # Keep any <think> as-is
+                assert "<think>" in str(m['content']), "Assistant message must contain <think>:" + str(m['content'])
+                updated.append(m)
+            else:
+                # Strip any <think>...</think>
+                new_message = dict(m)
+                new_message["content"] = _map_content(content, _strip_think_tags)
+                updated.append(new_message)
+            # User-triggered COT applies only to this assistant turn
+            cot_next_assistant = system_has_cot
+            continue
+
+        # Any other roles unchanged
+        updated.append(m)
+
+    row['messages'] = updated
+    return row
+
 if __name__ == "__main__":
     distiset, cost_tracker = run_pipeline(config)
     print(f"Cost: {dict(cost_tracker)}")
@@ -717,30 +836,61 @@ if __name__ == "__main__":
 
     distiset = utils.format_distiset(
         distiset, 
+        conversion_fn=convert_to_vision,
         images_ds_path=IMAGES_DS_PATH,
         path_substitution=config.path_substitution,
-        cols_to_keep=['answer_model_name', 'split'], 
+        cols_to_keep=['answer_model_name'], 
         n_workers=1,
     )
 
     distiset_n_images = sum(distiset['n_images'])
 
     # for synthetic cot or reasoning model, control token in system should always use think and otherwise be per-prompt
-    synthetic_cot_ds = load_from_disk(CACHE_DIR / 'synthetic_cot_for_multi_turn_vds')
-    mp_short_hn_ds = load_from_disk(CACHE_DIR / 'true_multi_page_short_hn_for_multi_turn_vds')
-    mp_short_doc_ds = load_from_disk(CACHE_DIR / 'true_multi_page_short_doc_for_multi_turn_vds')
+    synthetic_cot_ds = load_from_disk(CACHE_DIR / 'synthetic_cot_vds')
+    reasoning_ds = load_from_disk(CACHE_DIR / 'reasoning_vds')
+
+    listify_cols = lambda row: row | {
+        'answer_model_name': [row['answer_model_name']] if isinstance(row['answer_model_name'], str) else row['answer_model_name'],
+        'split': [row.get('split')] if isinstance(row.get('split'), str) else row.get('split')
+    }
+    distiset = distiset.map(
+        utils.hf_batched(listify_cols), batched=True,
+    )
+    synthetic_cot_ds = synthetic_cot_ds.map(
+        utils.hf_batched(listify_cols), batched=True,
+    )
+    reasoning_ds = reasoning_ds.map(
+        utils.hf_batched(listify_cols), batched=True,
+    )
     
-    cat_conversations = concatenate_conversations(
-        distiset,
+    synthetic_cot_mt = concatenate_conversations(
+        synthetic_cot_ds,
         same_source_target_images=distiset_n_images,
         different_source_target_images=distiset_n_images,
         seed=SEED,
     )
-    distiset = concatenate_datasets([
+    reasoning_mt = concatenate_conversations(
+        reasoning_ds,
+        same_source_target_images=distiset_n_images,
+        different_source_target_images=distiset_n_images,
+        seed=SEED,
+    )
+    mt_dataset = concatenate_datasets([
         distiset, 
-        cat_conversations['same_source'], 
-        cat_conversations['different_source'],
+        synthetic_cot_mt['same_source'], 
+        synthetic_cot_mt['different_source'],
     ])
+    think = mt_dataset.map(utils.hf_batched(partial(_apply_control_tok_rules, is_think=True, control_token='<cot>')), batched=True)
+    no_think = mt_dataset.map(utils.hf_batched(partial(_apply_control_tok_rules, is_think=False, control_token='<cot>')), batched=True)
 
-    distiset.save_to_disk(CACHE_DIR / 'multi_turn_vds')
+    think.save_to_disk(CACHE_DIR / 'multi_turn_w_cot_vds')
+    no_think.save_to_disk(CACHE_DIR / 'multi_turn_no_think_vds')
+
+    mt_dataset = concatenate_datasets([
+        distiset, 
+        reasoning_mt['same_source'], 
+        reasoning_mt['different_source'],
+    ])
+    think = mt_dataset.map(utils.hf_batched(partial(_apply_control_tok_rules, is_think=True, control_token='<reasoning>')), batched=True)
+    think.save_to_disk(CACHE_DIR / 'multi_turn_w_reasoning_vds')
 

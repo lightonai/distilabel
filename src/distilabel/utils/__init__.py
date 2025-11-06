@@ -23,6 +23,7 @@ from .image import (
     b64_decode_image,
     msg_content_img_url,
     msg_content_img_anthropic,
+    crop_image,
 )
 
 # Misc utilities
@@ -67,6 +68,10 @@ from .misc import (
     get_idx_to_filename,
     format_distiset,
     try_model_validate,
+    add_index_badge_to_image,
+    sample_match_target_histogram,
+    take_first_doc_occurrence,
+    get_page_count,
 )
 
 from .cpe import continuous_parallel_execution
@@ -85,7 +90,8 @@ __all__ = [
     "b64_decode_image",
     "msg_content_img_url",
     "msg_content_img_anthropic",
-    
+    "crop_image",
+
     # Misc utilities
     "normalize_distribution",
     "load_json",
@@ -128,6 +134,10 @@ __all__ = [
     "get_idx_to_filename",
     "format_distiset",
     "try_model_validate",
+    "add_index_badge_to_image",
+    "sample_match_target_histogram",
+    "take_first_doc_occurrence",
+    "get_page_count",
     # Timer
     "get_timer",
 ]

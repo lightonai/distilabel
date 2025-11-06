@@ -43,6 +43,7 @@ def run_pipeline(config: Config, dataset: Dataset, pipeline_name: str):
         name=pipeline_name,
         description='Transcribe each page, then use entire text to answer the question with strong LC models.',
         cache_dir=CACHE_DIR / pipeline_name,
+        disable_output_queue_timeout=True,  # qwen 3 thinking takes forever, disable timeout
     ) as pipeline:
         # ---------------------- Stage 0: transcribe each page ----------------------
         STAGE = 0
@@ -66,6 +67,7 @@ def run_pipeline(config: Config, dataset: Dataset, pipeline_name: str):
         transcribe_pages = [
             LMGenerationTask(
                 use_cache=True,
+                # invalidate_cache=True,
                 name=f'transcribe_pages_{i}',
                 stage=stage0,
                 llm=lm,
@@ -85,6 +87,8 @@ def run_pipeline(config: Config, dataset: Dataset, pipeline_name: str):
             cols=['md'],
             condition=utils.generation_is_structured,
             input_batch_size=BATCH_SIZE,
+            use_cache=True,
+            # invalidate_cache=True,
         )
 
         # Rejoin all chunks for each row (global step), restoring original source
@@ -126,7 +130,7 @@ def run_pipeline(config: Config, dataset: Dataset, pipeline_name: str):
         generate_answers = [
             LMGenerationTask(
                 use_cache=True,
-                # invalidate_cache=True,
+                # invalidate_cache='Qwen3' not in lm.lm_config.path,
                 name=f'answer_generation_{i}',
                 stage=stage1,
                 llm=lm,

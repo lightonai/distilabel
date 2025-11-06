@@ -14,17 +14,17 @@ from distilabel.pydantics import (
 # vllm serve Qwen/Qwen3-235B-A22B-Instruct-2507-FP8 -tp 2 -pp 2 --port 41256 --max-model-len 160000
 
 EXCLUDE_PDFS = set(Path('/mnt/nfs/austin_shared/mp_data_gen/bench_pdfs.txt').read_text().splitlines())
-SP_DS_PATH = Path('/mnt/nfs/austin_shared/mp_data_gen/distilabel/out/lc_sft/single_page_q_ds')
-MP_DS_PATH = Path('/mnt/nfs/austin_shared/mp_data_gen/distilabel/out/lc_sft/true_multi_page_q_ds')
+CACHE_DIR = Path('/mnt/nfs/austin_shared/mp_data_gen/distilabel/out/lc_sft/prompt_sampler_fixed')
+SP_DS_PATH = Path(CACHE_DIR / 'single_page_q_ds')
+MP_DS_PATH = Path(CACHE_DIR / 'true_multi_page_q_ds')
 IMAGES_DS_PATH = Path('/mnt/nfs/austin_shared/data/all_pdfs_images_ds')
 PDF_ROOT = Path('/mnt/nfs/pdfs')
-CACHE_DIR = Path('/mnt/nfs/austin_shared/mp_data_gen/distilabel/out/lc_sft')
-AVAILABLE_GPUS = [0, 1, 2, 3, 4, 5, 6, 7]
+AVAILABLE_GPUS = [4, 5, 6, 7]
 PATH_SUBSTITUTION = ('/lustre/fsn1/projects/rech/eya/uzj46do/pdfs/', '/mnt/nfs/pdfs/')
 
 TOP_K_PAGES = 8
 
-PIPELINE_NAME = 'synthetic_cot_v0'
+PIPELINE_NAME = 'synthetic_cot_v1'
 
 lc_mm_prompt_sampler_config = PromptSamplerConfig(
     distributions={
@@ -57,12 +57,12 @@ def lc_mm_overall_answer_lm_config(
         tp_size=gpu_mesh[1],
         replicas_per_vllm_server=gpu_mesh[2],
         vllm_kwargs={
-            'limit-mm-per-prompt': "'{\"image\": top_k}'".replace('top_k', str(TOP_K_PAGES)),
+            'limit-mm-per-prompt': "'{\"image\": top_k, \"video\": 0}'".replace('top_k', str(TOP_K_PAGES)),
             'max-model-len': '240000',
-            'gpu-memory-utilization': 0.9,
+            'gpu-memory-utilization': 0.92,
         } | ({'quantization': 'fp8'} if 'FP8-Dynamic' not in path else {
-            'max-num-batched-tokens': '8192',
-            'max-num-seqs': '64',
+            'max-num-batched-tokens': '4096',
+            'max-num-seqs': '128',
             'enable-expert-parallel': None,
             'mm-processor-cache-gb': '0',
         }),
@@ -81,15 +81,14 @@ stages = [
                 task_name='evidence_in_chunks',
                 temperature=0.7,
                 max_new_tokens=4096,
-                replicas=8,
+                replicas=4,
                 tp_size=2,
                 replicas_per_vllm_server=2,
                 vllm_kwargs={
-                    'limit-mm-per-prompt': "'{\"image\": 1}'",
+                    'limit-mm-per-prompt': "'{\"image\": 1, \"video\": 0}'",
                     'max-model-len': '32768',
                     'gpu-memory-utilization': 0.9,
                     'quantization': 'fp8',
-                    'max-num-seqs': '64',
                 },
                 out_model='EvidenceInChunks',
                 system_template_path='distilabel/prompts/lc_sft/evidence_in_chunks.txt',
@@ -97,7 +96,7 @@ stages = [
             ),
         ],
         available_gpus=AVAILABLE_GPUS,
-        max_dims=(1000, 1000),
+        max_dims=(1344, 1344),
     ),
 
     # Stage 1: overall answer
@@ -106,11 +105,10 @@ stages = [
         lm_configs=[
             # gemini flash, gpt 5 mini
             # LC MM models
-            # lc_mm_overall_answer_lm_config('gpt-5-mini', data_ratio=0.1, gpu_mesh=(1, None)),
-            # lc_mm_overall_answer_lm_config('gpt-5-nano', data_ratio=1.0, gpu_mesh=(1, None)),
             lc_mm_overall_answer_lm_config('gemini-2.5-flash', data_ratio=0.5, gpu_mesh=(1, None, 1)),
             lc_mm_overall_answer_lm_config('gemini-2.5-flash-lite', data_ratio=0.5, gpu_mesh=(1, None, 1)),
-            lc_mm_overall_answer_lm_config('RedHatAI/Qwen3-VL-235B-A22B-Instruct-FP8-Dynamic', data_ratio=1.0, gpu_mesh=(2, 8, 2)),
+            # lc_mm_overall_answer_lm_config('gemini-2.5-pro', data_ratio=1.0, gpu_mesh=(1, None, 1)),
+            lc_mm_overall_answer_lm_config('RedHatAI/Qwen3-VL-235B-A22B-Instruct-FP8-Dynamic', data_ratio=1.0, gpu_mesh=(2, 4, 2)),
 
             # qwen 235 instruct
             # text only models
@@ -122,12 +120,14 @@ stages = [
                 max_new_tokens=16384,
                 replicas=2,
                 tp_size=4,  # tp_size 8 not functional for this model
-                pp_size=2,
+                # pp_size=2,
                 replicas_per_vllm_server=2,
                 vllm_kwargs={
-                    'gpu-memory-utilization': 0.90,
+                    'gpu-memory-utilization': 0.94,
                     'max-model-len': '240000',
-                    # 'max-num-seqs': '64',
+                    'max-num-seqs': '64',
+                    'max-num-batched-tokens': '4096',
+                    'enable-expert-parallel': None,
                 },
                 out_model=None,
                 system_template_path='distilabel/prompts/lc_sft/combine_evidence_chunks.txt',

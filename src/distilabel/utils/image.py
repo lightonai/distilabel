@@ -196,6 +196,27 @@ def downsample_image(image: Image, max_dims: tuple[int, int] = (1000, 1100)):
     image.thumbnail(dims, Image.Resampling.LANCZOS)
     return image
 
+def crop_image(image: Image.Image, crop: dict[str, float]) -> Image.Image:
+    """Crop an image.
+
+    Args:
+    ----
+        image: The image to crop.
+        crop: A dictionary with keys ['top', 'bottom', 'left', 'right']
+        which specifies a ratio of the image to crop off the
+        top, bottom, left, and right. e.g. {'top': 0.1, 'bottom': 0, 'left': 0, 'right': 0}
+        will crop 10% off the top, and 0% off the bottom, left, and right of the image.
+    """
+    w, h = image.size
+    return image.crop(
+        (
+            crop["left"] * w,
+            crop["top"] * h,
+            (1 - crop["right"]) * w,
+            (1 - crop["bottom"]) * h,
+        )
+    )
+
 def b64_encode_image(image: Image):
     '''
     Encode an image as a base64 string

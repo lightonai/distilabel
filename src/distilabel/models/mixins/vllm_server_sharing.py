@@ -18,16 +18,20 @@ from distilabel.mixins.runtime_parameters import RuntimeParameter
 if TYPE_CHECKING:
     from logging import Logger
 
-_VLLM_SERVER_SHARING_FILE = (
-    Path(tempfile.gettempdir())
-    / "distilabel"
-    / "vllm_server_sharing"
-    / socket.gethostname()
-    / "distilabel_vllm_server_sharing.json"
-)
 
-if _VLLM_SERVER_SHARING_FILE.exists():
-    _VLLM_SERVER_SHARING_FILE.unlink()
+_VLLM_SERVER_SHARING_FILE = None
+
+def set_vllm_server_sharing_file(pipeline_name: str) -> Path:
+    global _VLLM_SERVER_SHARING_FILE
+    _VLLM_SERVER_SHARING_FILE = (
+        Path(tempfile.gettempdir())
+        / "distilabel"
+        / "vllm_server_sharing"
+        / socket.gethostname()
+        / pipeline_name
+        / "distilabel_vllm_server_sharing.json"
+    )
+    return _VLLM_SERVER_SHARING_FILE
 
 
 _logger = logging.getLogger('vllm_server_sharing')
@@ -144,14 +148,13 @@ class VLLMServerSharingMixin(BaseModel):
             
         server_key = self._server_info['server_key']
         with self._server_sharing_map() as sharing_map:
-            if server_key in sharing_map:
-                sharing_map[server_key]['port'] = port
-                sharing_map[server_key]['pid'] = pid
-                self._server_info['port'] = port
-                self._server_info['pid'] = pid
-                _logger.info(
-                    f"🔗 LLM '{self._llm_identifier}' key='{server_key}' updated server info with port {port} and pid {pid}"
-                )
+            sharing_map[server_key]['port'] = port
+            sharing_map[server_key]['pid'] = pid
+            self._server_info['port'] = port
+            self._server_info['pid'] = pid
+            _logger.info(
+                f"🔗 LLM '{self._llm_identifier}' key='{server_key}' updated server info with port {port} and pid {pid}"
+            )
 
     def unload(self) -> None:
         """Unloads the LLM and removes it from the shared server.
@@ -223,6 +226,8 @@ class VLLMServerSharingMixin(BaseModel):
             f.seek(0)
             f.truncate()
             f.write(json.dumps(content, indent=2))
+            f.flush()
+            os.fsync(f.fileno())
 
     def _compute_server_key(self) -> str:
         """Compute a unique key for a vLLM server configuration.
@@ -238,7 +243,7 @@ class VLLMServerSharingMixin(BaseModel):
         key_str = json.dumps(key_data, sort_keys=True)
         return hashlib.sha256(key_str.encode()).hexdigest()[:16]
 
-    def _wait_for_server_ready(self, server_key: str, timeout: int = 900) -> Dict[str, Union[int, None]]:
+    def _wait_for_server_ready(self, server_key: str, timeout: int = 1500) -> Dict[str, Union[int, None]]:
         """Block until the server owner updates port and pid for the given server key."""
         start = time.perf_counter()
         while time.perf_counter() - start < timeout:
