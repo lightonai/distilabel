@@ -1,8 +1,14 @@
 Your goal is to generate a list of {n_questions} different questions for the reader in the same language as the provided pages.
 
+Quality questions are difficult and not overly long (often less than 2 sentences).
+
 {side_by_side_prefix}
 {side_by_side}
 Here is the output format, provide nothing except this:
 {{
-    "questions": list[str]
+    "questions": list[str],
+    "page_word_count": int,
+    "is_table_of_contents": bool,
+    "is_bibliography": bool,
+    "not_suitable_for_questions": bool
 }}

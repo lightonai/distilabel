@@ -36,10 +36,10 @@ def add_distant_negatives(
     source: list[str] | str,
     hard_negs_idx_img_img: list[int],
     hard_negs_idx_txt_img: list[int],
-    max_distractors: int = 4,
+    max_distractors: int = 15,
     **kwargs,
 ) -> dict:
-    """Append up to 4 random distant hard negatives to 'source' using idx→filename mapping.
+    """Append up to max_distractors random distant hard negatives to 'source' using idx→filename mapping.
 
     Distant = beyond the first 32 in each list
     """
@@ -88,6 +88,7 @@ def run_pipeline(config: Config):
                 lm_config=lm.lm_config,
                 input_formatter=lm.format_input,
                 parallel_input_formatter=lm.parallel_format_inputs,
+                system_col='default_system',  # use model default system prompt
                 lm_input_cols=['question'],
                 input_batch_size=BATCH_SIZE,
                 resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.n_gpus, oversubscribe=lm.lm_config.replicas_per_vllm_server),
@@ -140,6 +141,6 @@ if __name__ == '__main__':
         images_ds_path=IMAGES_DS_PATH,
         path_substitution=config.path_substitution,
         cols_to_keep=['answer_model_name'], 
-        n_workers=16,
+        n_workers=4,
     )
     distiset.save_to_disk(CACHE_DIR / 'distractors_short_vds')

@@ -30,7 +30,12 @@ from distilabel.models.llms.together import TogetherLLM
 from distilabel.models.llms.vertexai import VertexAILLM
 from distilabel.models.llms.vllm import ClientvLLM, vLLM
 from distilabel.models.llms.vllm_api import vLLMAPI
-from distilabel.models.llms.openai_compatible import OpenAILM
+from distilabel.models.llms.openai_compatible import (
+    OpenAILM,
+    structured_output,
+    multiple_generations,
+    lm_cache,
+)
 from distilabel.models.mixins.cuda_device_placement import CudaDevicePlacementMixin
 from distilabel.typing import GenerateOutput, HiddenState
 from distilabel.models.llms.lm_cache import get_lm_cache
@@ -61,5 +66,8 @@ __all__ = [
     "VertexAILLM",
     "vLLM",
     "vLLMAPI",
+    "structured_output",
+    "multiple_generations",
+    "lm_cache",
     "get_lm_cache",
 ]

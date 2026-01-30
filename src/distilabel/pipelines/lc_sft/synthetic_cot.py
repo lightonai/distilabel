@@ -4,6 +4,7 @@ import random
 from distilabel.pipeline import Pipeline
 from datasets import load_from_disk, concatenate_datasets, Dataset
 from logging import getLogger
+import re
 
 from distilabel.steps import (
     StepResources,
@@ -27,6 +28,7 @@ from distilabel.configs.lc_sft.synthetic_cot import (
     config,
     SP_DS_PATH,
     MP_DS_PATH,
+    MP_DS_PATH_PT2,
     CACHE_DIR,
     TOP_K_PAGES,
     IMAGES_DS_PATH,
@@ -35,6 +37,27 @@ from distilabel.configs.lc_sft.synthetic_cot import (
 
 STAGE = 0
 BATCH_SIZE = 256
+MIN_RELEVANCE_SCORE = 1.0
+
+
+def _prompt_question_source_as_relevant(
+    source: list[str],
+    question_source: list[str],
+    **kwargs
+) -> dict:
+    '''If the single page of the source is part of the question source, prompt the model that it is explicitly relevant'''
+    return {
+        'explicitly_relevant': (
+            (
+                'Note, this page you are given is marked as explicitly relevant to the question ' 
+                'because the question was based on a set of up to 16 pages that included this one. ' 
+                'Thus, your relevance_score should be between 6.0 and 10.0, '
+                'but you are free to adjust within this range to reflect your own judgement.'
+            )
+            if source[0] in set(question_source) 
+            else None
+        )
+    }
 
 
 def _some_relevant(row: dict, cols: list[str]) -> bool:
@@ -42,20 +65,45 @@ def _some_relevant(row: dict, cols: list[str]) -> bool:
     return any(row['relevant'])
 
 
-def _combine_evidence(evidence: list[str], relevant: list[bool], **kwargs) -> dict:
+def _combine_evidence(
+    evidence: list[str], 
+    relevant: list[bool], 
+    relevance_score: list[float], 
+    explicitly_relevant: list[str | None],
+    **kwargs
+) -> dict:
     """
     Build a single evidence string from page-level evidence
     """
+    assert len(explicitly_relevant) == len(relevance_score)
+    relevance_score = [
+        score if exp_rel is None else max(score, 6.0)
+        for score, exp_rel in zip(relevance_score, explicitly_relevant)
+    ]
+
+    # parts uses up to the top topk
     parts: list[str] = []
+    asort = np.argsort(relevance_score)
+    top_k_pages = asort[np.array(relevance_score)[asort] > MIN_RELEVANCE_SCORE][-TOP_K_PAGES:] + 1  # +1 because page numbers are 1-indexed
+    # reversed orders it so that the highest relevance score is first
+    # I think this will be interesting because the model will see different page orders,
+    # forcing it to both consider the relevancy of pages and sort them and will give it
+    # the flexibility to go back and forth between pages, not being stuck to a single order 
+    # where if it skips something, it now is sure it isn't relevant. I think having diverse orders
+    # as well will help the model learn to think more, because it is more challenging to LM that as 
+    # opposed to the single order.
+    for i in reversed(top_k_pages):
+        ev_str = evidence[i - 1].strip()
+        if ev_str:
+            parts.append(f"Page {i}:\n{ev_str}")
+
+    # verbose uses all relevant evidence
     verbose_parts: list[str] = []
     for i, (ev, rel) in enumerate(zip(evidence, relevant), start=1):
         ev_str = ev.strip()
-        if ev_str:
-            ev_str = f"Page {i}:\n{ev_str}"
-            verbose_parts.append(ev_str)
-            ev_str = ev_str if rel else f"Page {i}: irrelevant"
-            parts.append(ev_str)
-
+        if ev_str and rel:
+            verbose_parts.append(f"Page {i}:\n{ev_str}")
+    
     combined = "\n\n".join(parts)
     verbose_combined = "\n\n".join(verbose_parts)
     return {'distilled_evidence': combined, 'combined_evidence': verbose_combined}
@@ -65,7 +113,7 @@ def _set_lc_mm_source(
     relevance_score: list[float], 
     page_source: list[str], 
     K: int, 
-    min_relevance_score: float = 5.0, 
+    min_relevance_score: float = MIN_RELEVANCE_SCORE, 
     **kwargs
 ) -> dict:
     '''Takes the top K most relevant pages and sets them as the source'''
@@ -98,6 +146,14 @@ def run_pipeline(config: Config, dataset: Dataset):
             input_batch_size=BATCH_SIZE,
         )
 
+        prompt_question_source_as_relevant = Map(
+            name='prompt_question_source_as_relevant',
+            fn=_prompt_question_source_as_relevant,
+            cols=['source', 'question_source'],
+            output_cols=['explicitly_relevant'],
+            input_batch_size=BATCH_SIZE,
+        )
+
         evidence_router = pipe_utils.data_router(
             step_distribution=[lm_config.data_ratio for lm_config in stage0.lm_configs]
         )
@@ -113,8 +169,8 @@ def run_pipeline(config: Config, dataset: Dataset):
                 lm_config=lm.lm_config,
                 input_formatter=lm.format_input,
                 parallel_input_formatter=lm.parallel_format_inputs,
-                lm_input_cols=['question'],
-                lm_input_col_prefixes=['Given question: '],
+                lm_input_cols=['question', 'explicitly_relevant'],
+                lm_input_col_prefixes=['Given question: ', ''],
                 input_batch_size=BATCH_SIZE,
                 resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.n_gpus, oversubscribe=lm.lm_config.replicas_per_vllm_server),
                 output_mappings={'system': 'evidence_system', 'model_name': 'evidence_model_name'},
@@ -145,6 +201,7 @@ def run_pipeline(config: Config, dataset: Dataset):
                 'hard_negs_idx_img_img',
                 'hard_negs_idx_txt_img',
                 'partial_source',
+                'question_source',
             ],
             input_batch_size=BATCH_SIZE,
         )
@@ -154,8 +211,8 @@ def run_pipeline(config: Config, dataset: Dataset):
             # use_cache=True,
             name='combine_evidence',
             fn=_combine_evidence,
-            cols=['evidence', 'relevant', 'source'],
-            output_cols=['combined_evidence'],
+            cols=['evidence', 'relevant', 'relevance_score', 'source'],
+            output_cols=['combined_evidence', 'distilled_evidence'],
             input_batch_size=BATCH_SIZE,
             output_mappings={'source': 'page_source'},
         )  # cols: ['source', 'evidence', 'relevant'] -> ['page_source', 'combined_evidence']
@@ -196,7 +253,7 @@ def run_pipeline(config: Config, dataset: Dataset):
         set_lc_mm_source = Map(
             # use_cache=True,
             name='set_lc_mm_source',
-            fn=partial(_set_lc_mm_source, K=TOP_K_PAGES),
+            fn=partial(_set_lc_mm_source, K=TOP_K_PAGES, min_relevance_score=MIN_RELEVANCE_SCORE),
             cols=['relevance_score', 'page_source'],
             output_cols=['source'],
             input_batch_size=BATCH_SIZE,
@@ -215,17 +272,18 @@ def run_pipeline(config: Config, dataset: Dataset):
                 lm_config=lm.lm_config,
                 input_formatter=lm.format_input,
                 parallel_input_formatter=lm.parallel_format_inputs,
-                lm_input_cols=['combined_evidence', 'question'],
-                lm_input_col_prefixes=['Per-page relevant context and your current chain of thought (feel free to correct your previous mistakes): ', ''],
+                lm_input_cols=['question'],
+                lm_input_col_prefixes=[''],
+                system_col='default_system',
                 input_batch_size=BATCH_SIZE,
                 resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.n_gpus, oversubscribe=lm.lm_config.replicas_per_vllm_server),
-                extra_cols=['combined_evidence'],
+                extra_cols=['distilled_evidence'],
                 output_mappings={
                     'generation': 'answer',
                     'system': 'answer_system', 
                     'model_name': 'answer_model_name', 
                     'source': 'top_k_pages',
-                    'combined_evidence': 'evidence',
+                    'distilled_evidence': 'evidence',
                 },
                 **lm.lm_config.task_kwargs,
             )
@@ -238,10 +296,10 @@ def run_pipeline(config: Config, dataset: Dataset):
             # use_cache=True,
             # invalidate_cache=True,
             name='set_evidence_as_source',
-            cols=['source', 'combined_evidence'],
-            output_mappings={'combined_evidence': 'source'},
+            cols=['source', 'distilled_evidence'],
+            output_mappings={'distilled_evidence': 'source'},
             input_batch_size=BATCH_SIZE,
-        )  # cols: ['combined_evidence'] -> ['source']
+        )  # cols: ['distilled_evidence'] -> ['source']
 
         text_only_answer_router = pipe_utils.data_router(
             step_distribution=[lm_config.data_ratio for lm_config in text_only_lm_configs]
@@ -297,7 +355,10 @@ def run_pipeline(config: Config, dataset: Dataset):
         )
 
         # ---------------------- Pipeline ----------------------
-        load_data >> split_chunks >> evidence_router >> extract_evidence >> filter_evidence >> rejoin_chunks >> combine_evidence >> filter_relevant >> branch_router
+        (
+            load_data >> split_chunks >> prompt_question_source_as_relevant >> 
+            evidence_router >> extract_evidence >> filter_evidence >> rejoin_chunks >> combine_evidence >> filter_relevant >> branch_router
+        )
         
         branch_router >> [lc_mm_branch, text_only_branch]
 
@@ -313,7 +374,7 @@ def run_pipeline(config: Config, dataset: Dataset):
     distiset, cost_tracker = pipeline.run(
         load_groups=(
             pipe_utils.steps_to_load_groups(
-                [load_data, split_chunks, *extract_evidence, filter_evidence],
+                [load_data, split_chunks, prompt_question_source_as_relevant, *extract_evidence, filter_evidence],
                 len(config.stages[0].available_gpus),
             )
             + [[rejoin_chunks.name]]  # global step on its own
@@ -335,18 +396,27 @@ def run_pipeline(config: Config, dataset: Dataset):
 
 fn_to_idx: dict[str, int] | None = None
 
-def convert_to_vision(row: dict, path_substitution: tuple[str, str] | None = None, **kwargs) -> dict:
+def convert_to_vision(row: dict, path_substitution: tuple[str | re.Pattern, str] | None = None, **kwargs) -> dict:
     '''
     Convert the row to vision format
     '''
     global fn_to_idx
-    image_indices = [fn_to_idx[ifn.replace(path_substitution[0], path_substitution[1])] for ifn in row['source']]
+    image_indices = [
+        fn_to_idx[
+             (
+                path_substitution[0].sub(path_substitution[1], ifn) 
+                if isinstance(path_substitution[0], re.Pattern)
+                else ifn.replace(path_substitution[0], path_substitution[1])
+            )
+            if path_substitution else ifn
+        ] for ifn in row['source']
+    ]
 
     user_content = (
         ''.join([f'<IMG_{i}>' for i in range(len(image_indices))])
         + row['question']
     )
-    assistant_content = f'<think>{row['distilled_evidence']}</think>\n{row['answer']}'
+    assistant_content = f'<think>{row['evidence']}</think>\n{row['answer']}'
     messages = [
         {'role': 'user', 'content': user_content},
         {'role': 'assistant', 'content': assistant_content}
@@ -373,11 +443,26 @@ def convert_to_vision(row: dict, path_substitution: tuple[str, str] | None = Non
     }
 
 
+def _add_question_source(ds: Dataset, full_to_init_src: dict[str, list[str]]) -> Dataset:
+    keys = {k for k in ds.column_names if k != 'source'}
+    return Dataset.from_list(
+        [
+            row | {
+                'question_source': full_to_init_src[
+                    utils.hash_structure_with_images({k: v for k, v in row.items() if k in keys})
+                ]
+            }
+            for row in ds
+        ]
+    )
+
+
 if __name__ == '__main__':
     # Load only the desired splits and add a split label
     cols_to_keep = ['source', 'question', 'split', 'question_model_name']
     sp_ds_dict = load_from_disk(SP_DS_PATH)
     mp_ds_dict = load_from_disk(MP_DS_PATH)
+    mp_ds_dict_pt2 = load_from_disk(MP_DS_PATH_PT2)
 
     sp_splits = [
         'distractors_short',
@@ -385,28 +470,52 @@ if __name__ == '__main__':
         'hn_short',
         'recursive_hn',
         'recursive_doc',
-        'full_context_one_shot_hn',
-        'full_context_one_shot_doc',
-        'reasoning_hn',
-        'reasoning_doc',
+
+        # 'full_context_one_shot_hn',
+        # 'full_context_one_shot_doc',
+        # 'reasoning_hn',
+        # 'reasoning_doc',
     ]
     mp_splits = [
         'true_multi_page_short_hn',
         'true_multi_page_short_doc',
         'recursive_hn',
         'recursive_doc',
-        'full_context_one_shot_hn',
-        'full_context_one_shot_doc',
-        'reasoning_hn',
-        'reasoning_doc',
+
+        # 'full_context_one_shot_hn',
+        # 'full_context_one_shot_doc',
+        # 'reasoning_hn',
+        # 'reasoning_doc',
     ]
+
+    sp_full_to_init_src = utils.load_json(SP_DS_PATH / 'row_to_init_src.json')
+    mp_full_to_init_src = utils.load_json(MP_DS_PATH / 'row_to_init_src.json')
+    mp_full_to_init_src_pt2 = utils.load_json(MP_DS_PATH_PT2 / 'row_to_init_src.json')
 
     datasets: list[Dataset] = []
     for split in sp_splits:
-        datasets.append(utils.add_split_label_ds(sp_ds_dict[split], f'sp_{split}'))
+        datasets.append(
+            utils.add_split_label_ds(
+                _add_question_source(sp_ds_dict[split], sp_full_to_init_src),
+                f'sp_{split}'
+            )
+        )
     for split in mp_splits:
-        datasets.append(utils.add_split_label_ds(mp_ds_dict[split], f'mp_{split}'))
-    dataset = concatenate_datasets(datasets).select_columns(cols_to_keep)
+        datasets.append(
+            utils.add_split_label_ds(
+                _add_question_source(mp_ds_dict[split], mp_full_to_init_src),
+                f'mp_{split}'
+            )
+        )
+        datasets.append(
+            utils.add_split_label_ds(
+                _add_question_source(mp_ds_dict_pt2[split], mp_full_to_init_src_pt2),
+                f'mp_{split}_pt2'
+            )
+        )
+    dataset = concatenate_datasets(datasets).select_columns(cols_to_keep + ['question_source']).shuffle(seed=0)
+    # dataset = dataset.select(range(50_000)).flatten_indices(num_proc=2)
+    dataset = dataset.select(range(50_000, 100_000)).flatten_indices(num_proc=2)
 
     distiset, cost_tracker = run_pipeline(config, dataset)
     print(f"Cost: {dict(cost_tracker)}")
@@ -420,15 +529,16 @@ if __name__ == '__main__':
         distiset, 
         convert_to_vision, 
         path_substitution=config.path_substitution,
-        cols_to_keep=['answer_model_name', 'split'], 
+        cols_to_keep=['answer_model_name', 'split', 'question_source'], 
         n_workers=16,
     )
 
-    distiset = distiset.shuffle(seed=0)
-    mt = distiset.select(range(200))
-    mt.save_to_disk(CACHE_DIR / 'for_multi_turn' / 'synthetic_cot_vds')
-    distiset = distiset.select(range(200, len(distiset)))
-    distiset.save_to_disk(CACHE_DIR / 'synthetic_cot_vds')
+    distiset.save_to_disk(CACHE_DIR / 'synthetic_cot_vds_pt2')
+    # distiset = distiset.shuffle(seed=0)
+    # mt = distiset.select(range(1000))
+    # mt.save_to_disk(CACHE_DIR / 'for_multi_turn' / 'synthetic_cot_vds')
+    # distiset = distiset.select(range(1000, len(distiset)))
+    # distiset.save_to_disk(CACHE_DIR / 'synthetic_cot_vds')
 
     # hn = distiset.filter(utils.hf_batched(lambda row: 'hn' in row['split']), batched=True, num_proc=16).remove_columns(['split'])
     # doc = distiset.filter(utils.hf_batched(lambda row: 'doc' in row['split']), batched=True, num_proc=16).remove_columns(['split'])
@@ -436,7 +546,3 @@ if __name__ == '__main__':
     # hn.save_to_disk(CACHE_DIR / 'synthetic_cot_hn_vds')
     # doc.save_to_disk(CACHE_DIR / 'synthetic_cot_doc_vds')
 
-'''
-MAYBE SWITCH TO QWEN 3 VL 30B FOR EVIDENCE EXTRACTION 
-UPDATE THE PROMPTING
-'''

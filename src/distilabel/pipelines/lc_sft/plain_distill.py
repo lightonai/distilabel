@@ -17,15 +17,16 @@ from distilabel.pydantics import Config
 
 from distilabel.configs.lc_sft.plain_distill import (
     config,
-    SP_DS_PATH,
-    MP_DS_PATH,
+    # SP_DS_PATH,
+    # MP_DS_PATH,
+    DS_PATH,
     IMAGES_DS_PATH,
     CACHE_DIR,
     PIPELINE_NAME,
 )
 
 STAGE = 0
-BATCH_SIZE = 128
+BATCH_SIZE = 256
 
 
 def run_pipeline(config: Config, dataset: Dataset):
@@ -58,6 +59,7 @@ def run_pipeline(config: Config, dataset: Dataset):
                 lm_input_cols=['question'],
                 input_batch_size=BATCH_SIZE,
                 resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.n_gpus, oversubscribe=lm.lm_config.replicas_per_vllm_server),
+                input_mappings={'source': 'question_source'},
                 output_mappings={'system': 'answer_system', 'model_name': 'answer_model_name', 'generation': 'answer'},
                 **lm.lm_config.task_kwargs,
             )
@@ -80,44 +82,47 @@ def run_pipeline(config: Config, dataset: Dataset):
             )
         ),
         use_cache=True,
-        invalidate_distiset=True, 
+        # invalidate_distiset=True, 
     )
     return distiset, cost_tracker
 
 
 if __name__ == '__main__':
     cols_to_keep = ['source', 'question', 'split', 'question_model_name']
-    sp_ds_dict = load_from_disk(SP_DS_PATH)
-    mp_ds_dict = load_from_disk(MP_DS_PATH)
+    # sp_ds_dict = load_from_disk(SP_DS_PATH)
+    # mp_ds_dict = load_from_disk(MP_DS_PATH)
 
-    sp_splits = [
-        'distractors_short',
-        'adj_short',
-        'hn_short',
-        'recursive_hn',
-        'recursive_doc',
-        'full_context_one_shot_hn',
-        'full_context_one_shot_doc',
-        'reasoning_hn',
-        'reasoning_doc',
-    ]
-    mp_splits = [
-        'true_multi_page_short_hn',
-        'true_multi_page_short_doc',
-        'recursive_hn',
-        'recursive_doc',
-        'full_context_one_shot_hn',
-        'full_context_one_shot_doc',
-        'reasoning_hn',
-        'reasoning_doc',
-    ]
+    # sp_splits = [
+    #     'distractors_short',
+    #     'adj_short',
+    #     'hn_short',
+    #     'recursive_hn',
+    #     'recursive_doc',
+    #     'full_context_one_shot_hn',
+    #     'full_context_one_shot_doc',
+    #     'reasoning_hn',
+    #     'reasoning_doc',
+    # ]
+    # mp_splits = [
+    #     'true_multi_page_short_hn',
+    #     'true_multi_page_short_doc',
+    #     'recursive_hn',
+    #     'recursive_doc',
+    #     'full_context_one_shot_hn',
+    #     'full_context_one_shot_doc',
+    #     'reasoning_hn',
+    #     'reasoning_doc',
+    # ]
 
-    datasets: list[Dataset] = []
-    for split in sp_splits:
-        datasets.append(utils.add_split_label_ds(sp_ds_dict[split], f'sp_{split}'))
-    for split in mp_splits:
-        datasets.append(utils.add_split_label_ds(mp_ds_dict[split], f'mp_{split}'))
-    dataset = concatenate_datasets(datasets).select_columns(cols_to_keep)
+    # datasets: list[Dataset] = []
+    # for split in sp_splits:
+    #     datasets.append(utils.add_split_label_ds(sp_ds_dict[split], f'sp_{split}'))
+    # for split in mp_splits:
+    #     datasets.append(utils.add_split_label_ds(mp_ds_dict[split], f'mp_{split}'))
+    # dataset = concatenate_datasets(datasets).select_columns(cols_to_keep)
+
+    dataset = load_from_disk(DS_PATH)
+    dataset = dataset.select_columns([col for col in cols_to_keep + ['question_source'] if col in dataset.column_names])
 
     distiset, cost_tracker = run_pipeline(config, dataset)
     print(f"Cost: {dict(cost_tracker)}")
@@ -128,8 +133,8 @@ if __name__ == '__main__':
         distiset, 
         images_ds_path=IMAGES_DS_PATH,
         path_substitution=config.path_substitution,
-        cols_to_keep=['answer_model_name', 'split'], 
+        cols_to_keep=['answer_model_name', 'question_source'],#, 'split'], 
         n_workers=16,
     )
 
-    distiset.save_to_disk(CACHE_DIR / 'plain_distill_vds')
+    distiset.save_to_disk(CACHE_DIR / 'plain_distill_question_source_vds')

@@ -96,9 +96,6 @@ BATCH_SIZE = 256
 IMG_TAG_PATTERN = re.compile(r"<IMG_\d+>")
 PAGE_REF_PATTERN = re.compile(r"\bpage\s*:?\s*\d+\b(?:\s*[-–]\s*\d+\b)?", re.IGNORECASE)
 
-def _resolve_path(path: str) -> str:
-    return path.replace(config.path_substitution[0], config.path_substitution[1])
-
 def vds_to_distilabel(row: dict) -> Dataset:
     global IDX_TO_IFN_IMAGES_DS
     assert row['messages'][-2]['role'] == 'user'
@@ -109,7 +106,7 @@ def vds_to_distilabel(row: dict) -> Dataset:
     question = re.sub(IMG_TAG_PATTERN, "", question)
     # question = re.sub(PAGE_REF_PATTERN, "", question)
     question = re.sub(r"\s{2,}", " ", question).strip()
-    source = [_resolve_path(IDX_TO_IFN_IMAGES_DS[i]) for i in row['images']]
+    source = [utils.resolve_path(IDX_TO_IFN_IMAGES_DS[i]) for i in row['images']]
     if '</think>' in answer:
         answer = answer.split('</think>')[1]
     # answer = re.sub(PAGE_REF_PATTERN, "", answer)

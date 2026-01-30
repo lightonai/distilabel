@@ -97,6 +97,7 @@ def make_lms(config: Config, stage: Stage, use_cache: bool = False, invalidate_c
                 'temperature': lm_config.temperature, 
                 'max_new_tokens': lm_config.max_new_tokens,
             },
+            api_call_extra_body=lm_config.api_call_extra_body,
             use_running_vllm=config.use_running_vllm,
             use_cache=use_cache,
             invalidate_cache=invalidate_cache[i] if isinstance(invalidate_cache, list) else invalidate_cache,

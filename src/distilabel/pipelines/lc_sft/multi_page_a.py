@@ -57,6 +57,7 @@ def run_pipeline(config: Config):
                 lm_config=lm.lm_config,
                 input_formatter=lm.format_input,
                 parallel_input_formatter=lm.parallel_format_inputs,
+                system_col='default_system',  # use model default system prompt
                 lm_input_cols=['question'],
                 input_batch_size=BATCH_SIZE,
                 resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.n_gpus, oversubscribe=lm.lm_config.replicas_per_vllm_server),

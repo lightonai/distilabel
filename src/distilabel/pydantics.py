@@ -1,6 +1,7 @@
 from pydantic import BaseModel, model_validator, Field
 from pathlib import Path as pth
 import sys
+import re
 from typing import Any, Literal, Callable
 from PIL import Image as PILImage
 
@@ -74,8 +75,10 @@ class LMConfig(BaseModel):
     '''number of replicas to create'''
     replicas_per_vllm_server: int = 1
     '''number of model replicas that share a single vLLM server instance (oversubscription factor)'''
-    vllm_kwargs: dict[str, Any] = {}
+    vllm_kwargs: dict[str, Any] = Field(default_factory=dict)
     '''kwargs passed directly to vllm. Use None as a value if the kwarg is just a flag'''
+    api_call_extra_body: dict[str, Any] = Field(default_factory=dict)
+    '''extra body passed to the api call. Can be used for e.g. chat templates'''
 
     lm_response_cache_root: pth = Field(default_factory=pth)
     '''root directory for the lm response cache, set by the step when created'''
@@ -137,7 +140,7 @@ class Config(BaseModel):
     You can also set the VLLM_API_BASE_URL environment variable to the base url of the vllm server and set up e.g. multi-node vllm servers
     behind an nginx proxy to scale to multiple nodes
     '''
-    path_substitution: tuple[str, str] | None = None
+    path_substitution: tuple[str | re.Pattern, str] | None = None
     '''
     if a tuple, will call str.replace(substitution[0], substitution[1]) on any paths in the source column
     '''
@@ -155,11 +158,16 @@ class CoT(BaseModel):
 class SinglePageQuestions(BaseModel):
     '''Config for the single page questions output format'''
     questions: list[str]
+    page_word_count: int
+    is_table_of_contents: bool
+    is_bibliography: bool
+    not_suitable_for_questions: bool
 
 class MultiPageQuestions(BaseModel):
     '''Model for structured output from multi-page question generation'''
     analysis: str
     questions: list[str]
+    not_suitable_for_questions: bool
 
 class AnalysisQuestion(BaseModel):
     analysis: str
@@ -203,8 +211,14 @@ class ThinkingCount(CoT):
 
 class EvidenceInChunks(BaseModel):
     evidence: str
-    relevant: bool
     relevance_score: float
+    relevant: bool = False
+
+    @model_validator(mode='after')
+    def apply_default_system_template(self) -> 'EvidenceInChunks':
+        if self.relevance_score > 0.0:
+            self.relevant = True
+        return self
 
 class UnanswerableQA(BaseModel):
     analysis: str

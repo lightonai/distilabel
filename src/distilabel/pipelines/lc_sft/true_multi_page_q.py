@@ -6,7 +6,7 @@ from typing import  Any, Tuple
 from tqdm import tqdm
 from functools import partial
 from logging import getLogger
-
+from pathlib import Path
 from distilabel.pipeline import Pipeline
 from datasets import load_from_disk, Dataset, DatasetDict
 
@@ -40,33 +40,27 @@ from distilabel.configs.lc_sft.true_multi_page_q import (
 # Seed building helpers
 # ----------------------------------------------------------------------------
 
-def _resolve_path(path: str) -> str:
-    return path.replace(config.path_substitution[0], config.path_substitution[1])
+_resolve_path = partial(utils.resolve_path, path_substitution=config.path_substitution)
 
 SEED = 0
 random.seed(SEED)
 
 TARGET_COUNTS = {
-    'true_multi_page_short_hn': 1_000,
-    'true_multi_page_short_doc': 1_800,
-    'recursive_hn': 500,
-    'recursive_doc': 1_000,
-    'full_context_one_shot_hn': 500,
-    'full_context_one_shot_doc': 1_000,
-    'reasoning_hn': 500,
-    'reasoning_doc': 1_000,
+    'true_multi_page_short_hn': 10_000,
+    'true_multi_page_short_doc': 10_00,
+    'recursive_hn': 50_000,
+    'recursive_doc': 50_000,
+    # 'full_context_one_shot_hn': 500,
+    # 'full_context_one_shot_doc': 1_000,
+    # 'reasoning_hn': 500,
+    # 'reasoning_doc': 1_000,
 }
-
-# TARGET_COUNTS = {  # 
-#     'true_multi_page_short_hn': 25,
-#     'true_multi_page_short_doc': 50,
-#     'recursive_hn': 25,
-#     'recursive_doc': 50,
-#     'full_context_one_shot_hn': 25,
-#     'full_context_one_shot_doc': 50,
-#     'reasoning_hn': 25,
-#     'reasoning_doc': 50,
-# }
+TARGET_COUNTS2 = {
+    'true_multi_page_short_hn': 20_000,
+    'true_multi_page_short_doc': 20_000,
+    'recursive_hn': 150_000,
+    'recursive_doc': 150_000,
+}
 
 IDX_TO_IFN_IMAGES_DS = None  # filled in main
 FN_TO_PAGE_COUNT = None  # filled in main
@@ -75,7 +69,7 @@ FN_TO_PAGE_COUNT = None  # filled in main
 def _pdf_ok_for_doc(pdf_path: str) -> bool:
     global FN_TO_PAGE_COUNT
     n = FN_TO_PAGE_COUNT[pdf_path]
-    return 5 <= n <= 336
+    return 3 <= n <= 336
 
 
 def _sorted_by_page(paths: list[str]) -> list[str]:
@@ -92,6 +86,7 @@ def _close_hn_seed(row: dict[str, Any], top_k: int, n_pages: int) -> list[str]:
     hni = (row.get('hard_negs_idx_img_img', []) or [])[:top_k]
     hnt = (row.get('hard_negs_idx_txt_img', []) or [])[:top_k]
     candidates = list(dict.fromkeys(hni + hnt))  # preserve order, unique
+    candidates = [c for c in candidates if Path(utils.pdf_name(_resolve_path(IDX_TO_IFN_IMAGES_DS[c]))).exists()]
     if len(candidates) == 0:
         return []
     k = min(n_pages, len(candidates))
@@ -112,7 +107,7 @@ def _adjacent_pages_seed(anchor_ifn: str, n_pages: int) -> list[str]:
         return []
     anchor_page = utils.pdf_page(anchor_ifn)
     total = FN_TO_PAGE_COUNT[pdf_path]
-    n_select = min(max(2, min(5, n_pages)), total)
+    n_select = min(max(2, min(3, n_pages)), total)
 
     # Build a contiguous window of size n_select that includes the anchor,
     # centered when possible, and shifted to respect document bounds.
@@ -139,7 +134,7 @@ def _random_doc_subsample_seed(anchor_ifn: str, n_pages: int) -> list[str]:
     if not _pdf_ok_for_doc(pdf_path):
         return []
     total = FN_TO_PAGE_COUNT[pdf_path]
-    n_select = max(2, min(5, n_pages))
+    n_select = max(2, min(3, n_pages))
     pool = list(range(total))
     # Ensure we include anchor
     anchor_page = utils.pdf_page(anchor_ifn)
@@ -163,7 +158,7 @@ def get_ds(n: int, front: bool = False) -> Dataset:
         ds, 
         EXCLUDE_PDFS, 
         row_to_ifn=lambda row: _resolve_path(row['image_filename']),
-        num_proc=32,
+        num_proc=64,
     )
     ds = utils.remove_pdfs_with_pages_(
         ds, 
@@ -192,8 +187,12 @@ def structured_and_requires_multiple_pages(row: dict, cols: list[str]) -> bool:
     return not any(row['question_fully_answered']) and structured
 
 
-def build_seeds(ds: Dataset, target_counts: dict[str, int], allow_doc_reuse: bool = False) -> list[dict[str, Any]]:
-    """Build initial 2–5 page seeds for all 8 target splits."""
+def build_seeds(ds: Dataset, target_counts: dict[str, int], allow_doc_reuse: bool = False) -> Dataset:
+    """Build initial 2+ page seeds for all 8 target splits."""
+    ds_cache_path = CACHE_DIR / f'.true_multi_page_q_seeds_{utils.hash_structure_with_images(target_counts)}'
+    if ds_cache_path.exists():
+        return load_from_disk(ds_cache_path)
+
     # Precompute mapping and page counts
     global IDX_TO_IFN_IMAGES_DS, FN_TO_PAGE_COUNT
     IDX_TO_IFN_IMAGES_DS = utils.get_idx_to_filename(IMAGES_DS_PATH)
@@ -241,13 +240,13 @@ def build_seeds(ds: Dataset, target_counts: dict[str, int], allow_doc_reuse: boo
 
         # true_multi_page_short_hn: only close hard negs, top 8
         if want('true_multi_page_short_hn'):
-            src = _close_hn_seed(row, top_k=8, n_pages=random.randint(1, 4))
+            src = _close_hn_seed(row, top_k=32, n_pages=random.randint(1, 16))
             add_to_seed('true_multi_page_short_hn', src, row)
             continue
 
-        # true_multi_page_short_doc: only adjacent pages, doc in [5,336]
+        # true_multi_page_short_doc: only adjacent pages, doc in [3,336]
         if want('true_multi_page_short_doc'):
-            src = _adjacent_pages_seed(anchor, n_pages=random.randint(2, 5))
+            src = _adjacent_pages_seed(anchor, n_pages=random.randint(2, 16))
             add_to_seed('true_multi_page_short_doc', src, row)
             continue
 
@@ -259,7 +258,7 @@ def build_seeds(ds: Dataset, target_counts: dict[str, int], allow_doc_reuse: boo
             # random top_k means it will sometimes pull from closest negs, sometimes slightly further
             # closest negs are probably more coherent together and thus better for making 
             # questions that require each of them. But should be diverse
-            src = _close_hn_seed(row, top_k=random.randint(8, 24), n_pages=random.randint(1, 4))
+            src = _close_hn_seed(row, top_k=random.randint(8, 48), n_pages=random.randint(1, 16))
             add_to_seed(split, src, row)
             anchor_used = True
             break
@@ -272,16 +271,21 @@ def build_seeds(ds: Dataset, target_counts: dict[str, int], allow_doc_reuse: boo
                 continue
             idx_doc = (idx_doc + 1) % 2
             if idx_doc == 0:
-                src = _adjacent_pages_seed(anchor, n_pages=random.randint(2, 5))
+                src = _adjacent_pages_seed(anchor, n_pages=random.randint(2, 16))
             else:
-                src = _random_doc_subsample_seed(anchor, n_pages=random.randint(2, 5))
+                src = _random_doc_subsample_seed(anchor, n_pages=random.randint(2, 16))
             add_to_seed(split, src, row)
             break
 
     # Flatten
-    all_seeds = [item for split in seeds for item in seeds[split]]
+    ds_list = [item for split in seeds for item in seeds[split]]
+    ds_list = [row for row in ds_list if all(Path(utils.pdf_name(_resolve_path(ifn))).exists() for ifn in row['source'])]
+    all_seeds = Dataset.from_list(ds_list)
+    all_seeds.save_to_disk(ds_cache_path)
     return all_seeds
 
+def suitable_for_questions(row: dict, cols: list[str]) -> bool:
+    return not row['not_suitable_for_questions']
 
 STAGE = 0
 BATCH_SIZE = 256
@@ -294,6 +298,7 @@ def run_pipeline_for_questions(seed_ds: Dataset, config: Config):
         name=PIPELINE_NAME,
         description='Generate multi-page questions with filtering (stages 0–2 of true_multi_page).',
         cache_dir=CACHE_DIR / 'true_multi_page_q',
+        disable_output_queue_timeout=True,
     ) as pipeline:
         # Stage 0: initial questions
         stage = config.stages[STAGE]
@@ -321,6 +326,16 @@ def run_pipeline_for_questions(seed_ds: Dataset, config: Config):
             )
             for i, lm in enumerate(lms)
         ]  # cols: ['source', ...] -> ['questions', 'question_system', 'question_model_name', ...]
+
+        filter_not_suitable_for_questions = FilterRows(
+            name='filter_not_suitable_for_questions',
+            cols=['not_suitable_for_questions'],
+            condition=utils.logical_and_filters(
+                utils.generation_is_structured, 
+                suitable_for_questions,
+            ),
+            input_batch_size=BATCH_SIZE,
+        )
 
         questions_to_rows = ListToRows(
             name="questions_to_rows",
@@ -447,7 +462,7 @@ def run_pipeline_for_questions(seed_ds: Dataset, config: Config):
         judge_answers = [
             LMGenerationTask(
                 use_cache=True,
-                invalidate_cache=True,
+                # invalidate_cache=True,
                 name=f'answer_judge_{i}',
                 stage=stage,
                 llm=lm,
@@ -491,7 +506,7 @@ def run_pipeline_for_questions(seed_ds: Dataset, config: Config):
 
         # Graph
         # Stage 0: initial questions
-        load_data >> data_router >> generate_questions >> questions_to_rows >> drop_none_questions
+        load_data >> data_router >> generate_questions >> filter_not_suitable_for_questions >> questions_to_rows >> drop_none_questions
 
         # Stage 1: single page answers + question requirements
         drop_none_questions >> [q_req_branch, split_pages['sp_branch']]
@@ -512,7 +527,7 @@ def run_pipeline_for_questions(seed_ds: Dataset, config: Config):
     distiset, cost_tracker = pipeline.run(
         load_groups=(
             pipe_utils.steps_to_load_groups(
-                [load_data, *generate_questions, questions_to_rows, drop_none_questions],
+                [load_data, *generate_questions, filter_not_suitable_for_questions, questions_to_rows, drop_none_questions],
                 len(config.stages[0].available_gpus),
             ) +
             pipe_utils.steps_to_load_groups(
@@ -532,7 +547,7 @@ def run_pipeline_for_questions(seed_ds: Dataset, config: Config):
             )
         ),
         use_cache=True,
-        invalidate_distiset=True,
+        # invalidate_distiset=True,
     )
     return distiset, cost_tracker
 
@@ -559,6 +574,7 @@ def _add_pages_hn(
     hni = (row.get('hard_negs_idx_img_img', []) or [])[:top_k]
     hnt = (row.get('hard_negs_idx_txt_img', []) or [])[:top_k]
     candidates = list(dict.fromkeys(hni + hnt))
+    candidates = [c for c in candidates if Path(utils.pdf_name(_resolve_path(IDX_TO_IFN_IMAGES_DS[c]))).exists()]
 
     # add a random amount up to the max_total
     n = random.randint(0, remaining)
@@ -575,7 +591,7 @@ def _doc_eligible_batched(batch: dict[str, list[Any]]) -> list[bool]:
         anchor = src[0]
         pdf_path = utils.pdf_name(anchor)
         n = FN_TO_PAGE_COUNT[pdf_path]
-        keep.append(5 <= n <= 336)
+        keep.append(3 <= n <= 336)
     return keep
 
 
@@ -610,9 +626,15 @@ def augment_into_splits(distiset: Dataset) -> DatasetDict:
     from the doc.
     '''
     global TARGET_COUNTS
+    global IDX_TO_IFN_IMAGES_DS, FN_TO_PAGE_COUNT
+    if IDX_TO_IFN_IMAGES_DS is None:
+        IDX_TO_IFN_IMAGES_DS = utils.get_idx_to_filename(IMAGES_DS_PATH)
+    if FN_TO_PAGE_COUNT is None:
+        FN_TO_PAGE_COUNT = utils.count_all_pages(PDF_ROOT, CACHE_DIR)
+
     # Group by target split
     by_split = {
-        split: distiset.filter(utils.hf_batched(lambda row: row['split'] == split), batched=True, num_proc=32)
+        split: distiset.filter(utils.hf_batched(lambda row: row['split'] == split), batched=True, num_proc=4)
         for split in TARGET_COUNTS.keys()
     }
 
@@ -620,39 +642,72 @@ def augment_into_splits(distiset: Dataset) -> DatasetDict:
     cols_to_keep = ['source', 'question', 'question_model_name']
 
     # true multi page short doesn't get additional pages
-    out['true_multi_page_short_hn'] = by_split['true_multi_page_short_hn'].select_columns(cols_to_keep)
-    out['true_multi_page_short_doc'] = by_split['true_multi_page_short_doc'].select_columns(cols_to_keep)
+    if 'true_multi_page_short_hn' in by_split:
+        out['true_multi_page_short_hn'] = by_split['true_multi_page_short_hn'].select_columns(cols_to_keep)
+    if 'true_multi_page_short_doc' in by_split:
+        out['true_multi_page_short_doc'] = by_split['true_multi_page_short_doc'].select_columns(cols_to_keep)
 
     # HNs
     for name in ['recursive_hn', 'full_context_one_shot_hn', 'reasoning_hn']:
-        out[name] = (
-            by_split[name]
-            .map(utils.hf_batched(partial(_add_pages_hn, max_total=64, top_k=32)), batched=True, num_proc=32)
-            .select_columns(cols_to_keep)
-        )
+        if name in by_split:
+            out[name] = (
+                by_split[name]
+                .map(utils.hf_batched(partial(_add_pages_hn, max_total=96, top_k=48)), batched=True, num_proc=4)
+                .select_columns(cols_to_keep)
+            )
     # Docs
     for name in ['recursive_doc', 'full_context_one_shot_doc', 'reasoning_doc']:
         reasoning = 'reasoning' in name
-        out[name] = (
-            by_split[name]
-            .filter(partial(_doc_eligible_batched), batched=True, num_proc=32)
-            .map(utils.hf_batched(partial(_add_pages_doc, reasoning=reasoning)), batched=True, num_proc=32)
-            .select_columns(cols_to_keep)
-        )
+        if name in by_split:
+            out[name] = (
+                by_split[name]
+                .filter(partial(_doc_eligible_batched), batched=True, num_proc=4)
+                .map(utils.hf_batched(partial(_add_pages_doc, reasoning=reasoning)), batched=True, num_proc=4)
+                .select_columns(cols_to_keep)
+            )
 
     return DatasetDict(out)
 
 
 if __name__ == '__main__':
     total_needed = sum(TARGET_COUNTS.values())
-    base_ds = get_ds(total_needed * 2, front=False)
-    seeds = build_seeds(base_ds, TARGET_COUNTS)
-    seed_ds = Dataset.from_list(seeds)
+    base_ds = get_ds(4_000_000, front=False)
+    seed_ds1 = build_seeds(base_ds, TARGET_COUNTS, allow_doc_reuse=True)  # allow doc reuse to get more examples
+    from tqdm import tqdm
+    seed1_fns = {tuple(sorted(fns)) for fns in tqdm(seed_ds1['source'])}
+    
+    seed_ds2 = build_seeds(base_ds, TARGET_COUNTS2, allow_doc_reuse=True) 
+    seed2_fns = {tuple(sorted(fns)): idx for idx, fns in enumerate(tqdm(seed_ds2['source']))}
+    seed_ds = seed_ds2.select([idx for fns, idx in seed2_fns.items() if fns not in seed1_fns])
+    seed_ds = seed_ds.select(range(140_000, len(seed_ds))).flatten_indices(num_proc=64) 
 
     questions_ds, cost_tracker = run_pipeline_for_questions(seed_ds, config)
     print(f"Cost: {dict(cost_tracker)}")
     questions_ds = questions_ds['default']['train']
     questions_ds = questions_ds.remove_columns(['distilabel_metadata'])
 
+    questions_ds = questions_ds.shuffle(seed=0)
+    questions_ds = utils.take_n_first_doc_occurrences(
+        questions_ds, 
+        row_to_ifn=lambda row: _resolve_path(row['source'][0]),
+        _resolve_path=_resolve_path,
+        n=4,
+    )
+
     ds_dict = augment_into_splits(questions_ds)
-    ds_dict.save_to_disk(CACHE_DIR / 'true_multi_page_q_ds')
+    ds_dict.save_to_disk(CACHE_DIR / 'true_multi_page_q_ds_2')
+
+    init_row_to_src = {
+        utils.hash_structure_with_images({k: v for k, v in row.items() if k in {'question', 'question_model_name'}}): row['source']
+        for row in questions_ds
+    }
+    final_rows = [row for split in ds_dict.values() for row in split]
+
+    row_to_init_src = {}
+    for row in final_rows:
+        row_id = utils.hash_structure_with_images({k: v for k, v in row.items() if k in {'question', 'question_model_name'}})
+        if set(init_row_to_src[row_id]).issubset(set(row['source'])):
+            row_to_init_src[row_id] = init_row_to_src[row_id]
+    utils.save_json(CACHE_DIR / 'true_multi_page_q_ds_2' / 'row_to_init_src.json', row_to_init_src)
+
+

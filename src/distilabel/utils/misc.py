@@ -126,9 +126,9 @@ def get_idx_to_filename(ds_path: str | Path) -> dict[int, str]:
     save_json(cache_path, mapping)
     return mapping
 
-def generate_field_to_idx(ds, field, substitution: tuple[str, str] | None = None):
+def generate_field_to_idx(ds, field, substitution: tuple[str | re.Pattern, str] | None = None):
     field_to_idx = {
-        field.replace(substitution[0], substitution[1]) if substitution else field: idx
+        substitution[0].sub(substitution[1], field) if substitution else field: idx
         for idx, field in enumerate(ds[field])
     }
     return field_to_idx
@@ -359,14 +359,20 @@ def logical_not_filter(filter: Callable) -> Callable:
     return partial(_not_filter, filter=filter)
 
 def _and_filter(*args, filters: list[Callable] = [], **kwargs):
-    return all([f(*args, **kwargs) for f in filters])
+    for f in filters:
+        if not f(*args, **kwargs):
+            return False
+    return True
 
 def logical_and_filters(*filters: list[Callable]) -> Callable:
     '''Return a filter that is the logical AND of the filters'''
     return partial(_and_filter, filters=filters)
 
 def _or_filter(*args, filters: list[Callable] = [], **kwargs):
-    return any([f(*args, **kwargs) for f in filters])
+    for f in filters:
+        if f(*args, **kwargs):
+            return True
+    return False
 
 def logical_or_filters(*filters: list[Callable]) -> Callable:
     '''Return a filter that is the logical OR of the filters'''
@@ -513,6 +519,8 @@ def clean_structured_output(
         output = output[len('```json'):]
     if output.endswith('```'):
         output = output[:-len('```')]
+    output = output.replace('<|begin_of_box|>', '')
+    output = output.replace('<|end_of_box|>', '')
     # Double-escape single backslashes only inside JSON string values and normalize raw newlines
     def _double_escape_in_strings(s: str) -> str:
         s = s.replace('\\\\', '\\')
@@ -660,6 +668,14 @@ def count_all_pages(
     save_json(path_to_page_count_path, path_to_page_count)
     return path_to_page_count
 
+def resolve_path(path: str, path_substitution: tuple[str, str | re.Pattern] | None = None) -> str:
+    if path_substitution is None:
+        return path
+    if isinstance(path_substitution[0], re.Pattern):
+        return path_substitution[0].sub(path_substitution[1], path)
+    else:
+        return path.replace(path_substitution[0], path_substitution[1])
+
 def remove_pdfs_from_dataset(
     dataset: Dataset, 
     exclude_pdfs: set[str], 
@@ -700,29 +716,55 @@ def remove_pdfs_with_pages_(
         num_proc=num_proc,
     )
 
-def take_first_doc_occurrence(dataset: Dataset, _resolve_path: Callable = lambda x: x) -> Dataset:
-    docs_used = set()
-    ifns = dataset['image_filename']
+def take_n_first_doc_occurrences(
+    dataset: Dataset, 
+    row_to_ifn: Callable = lambda row: row['image_filename'], 
+    _resolve_path: Callable = lambda x: x,
+    n: int = 1,
+) -> Dataset:
+    docs_used = defaultdict(int)
+    ifns = [row_to_ifn(row) for row in dataset]
     pruned_ds = []
     for idx, ifn in enumerate(ifns):
         pdf_path = pdf_name(_resolve_path(ifn))
-        if pdf_path in docs_used:
+        docs_used[pdf_path] += 1
+        if docs_used[pdf_path] > n:
             continue
-        docs_used.add(pdf_path)
         pruned_ds.append(idx)
     dataset = dataset.select(pruned_ds).flatten_indices()
     return dataset
 
+def filter_path_exists(
+    dataset: Dataset, 
+    row_to_ifn: Callable = lambda row: row['image_filename'],
+    resolve_path: Callable = lambda x: x,
+    num_proc: int = 16,
+) -> Dataset:
+    docs = set()
+    for row in dataset:
+        doc = resolve_path(pdf_name(row_to_ifn(row)))
+        if Path(doc).exists():
+            docs.add(doc)
+    return dataset.filter(
+        hf_batched(lambda x: resolve_path(pdf_name(row_to_ifn(x))) in docs),
+        batched=True,
+        num_proc=num_proc,
+    )
+
 fn_to_idx: dict[str, int] | None = None
 
-def default_conversion_fn(row: dict, path_substitution: tuple[str, str] | None = None, **kwargs) -> dict:
+def default_conversion_fn(row: dict, path_substitution: tuple[str | re.Pattern, str] | None = None, **kwargs) -> dict:
     '''
     Default conversion function for the distiset.
     '''
     global fn_to_idx
     image_indices = [
         fn_to_idx[
-            ifn.replace(path_substitution[0], path_substitution[1])
+            (
+                path_substitution[0].sub(path_substitution[1], ifn) 
+                if isinstance(path_substitution[0], re.Pattern)
+                else ifn.replace(path_substitution[0], path_substitution[1])
+            )
             if path_substitution else ifn
         ] for ifn in row['source']
     ]

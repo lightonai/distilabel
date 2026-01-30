@@ -41,15 +41,6 @@ def _format_one_input(args) -> 'ChatType':
     ) = args
     messages = [] if system_prompt == 'default_system' else [{'role': 'system', 'content': system_prompt}]
 
-    if not all(input.get(col) is not None for col in lm_input_cols + ['source']):
-        # some assurance that the values we want to use exist in input
-        # generation will be skipped in LMGenerationTask for this kind of input
-        logger.warning(
-            f"Skipping generation because some required columns are missing from {lm_input_cols + ['source']}\n"
-            f"Input: {input}"
-        )
-        return [{'role': 'system', 'content': ''}]
-
     try:
         # converts the source col into a message in openai format (does downsampling and base64 encoding as well)
         messages.append(
@@ -59,7 +50,7 @@ def _format_one_input(args) -> 'ChatType':
                 msg_content_img_func, 
                 path_substitution,
                 postprocess_image_hook,
-                'pdf2image',
+                'pdfium',
             )
         )
         
@@ -70,13 +61,15 @@ def _format_one_input(args) -> 'ChatType':
         if len(lm_input_col_prefixes) == 0:
             lm_input_col_prefixes = [''] * len(lm_input_cols)
         for col, prefix in zip(lm_input_cols, lm_input_col_prefixes):
+            if input[col] is None:
+                continue
             message = utils.source_to_msg(
                 input[col], 
                 max_dims, 
                 msg_content_img_func, 
                 path_substitution,
                 postprocess_image_hook,
-                'pdf2image',
+                'pdfium',
             )
             if isinstance(message['content'], str):
                 prefixes_content.append({'type': 'text', 'text': prefix + message['content'] + '\n'})
@@ -180,7 +173,7 @@ class VLM:
                 self._executor.shutdown(wait=False)
                 del self._executor
                 self._executor = ProcessPoolExecutor(max_workers=min(max(4, cpu_count()), 32))
-                return [{'role': 'system', 'content': ''}] * len(tasks)
+                return [[{'role': 'system', 'content': ''}] for _ in range(len(tasks))]
 
     def load(self):
         self.prompt_sampler = PromptSampler(self.lm_config.prompt_sampler_config, self.lm_config.system_template)
@@ -388,6 +381,7 @@ class OpenAILM(OpenAILLM, CudaDevicePlacementMixin, VLLMServerPlacementMixin, VL
     use_vllm: bool = False
     use_cache: bool = True
     invalidate_cache: bool = False
+    api_call_extra_body: dict[str, Any] = Field(default_factory=dict)
     _vllm_api: vLLMAPI = PrivateAttr(None)
 
     def load(self):
@@ -507,7 +501,7 @@ class OpenAILM(OpenAILLM, CudaDevicePlacementMixin, VLLMServerPlacementMixin, VL
                 messages=input,
                 max_completion_tokens=max_new_tokens,
                 temperature=temperature,
-                extra_body=extra_body,
+                extra_body=extra_body or {} | self.api_call_extra_body,
                 timeout=1800,
             )
             return completion
@@ -516,6 +510,9 @@ class OpenAILM(OpenAILLM, CudaDevicePlacementMixin, VLLMServerPlacementMixin, VL
             completion = await _generate()
         except openai.APIConnectionError as e:
             self._logger.warning(f"Failed to get client response, exception: {e}")
+            raise e
+        except openai.BadRequestError as e:
+            self._logger.warning(f"Failed to get client response, bad request error: {e}\n{input=}")
             raise e
         except Exception as e:
             completion = None

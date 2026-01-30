@@ -14,6 +14,7 @@
 
 import base64
 import io
+import re
 from pdf2image import convert_from_path
 from PIL import Image
 from datasets import Dataset
@@ -92,7 +93,7 @@ def load_from_pdf(filename: str | pth, pdf_backend: str = "pdfium") -> Image.Ima
 def load_from_filename(
     filename: str, 
     crop: dict[str, int] | None = None,
-    path_substitution: tuple[str, str] | None = None,
+    path_substitution: tuple[str | re.Pattern, str] | None = None,
     pdf_backend: str = "pdfium",
 ):
     """
@@ -104,12 +105,21 @@ def load_from_filename(
 
     crop is an optional dict with keys from ['top', 'bottom', 'left', 'right']
     which can specify a percent of the image to crop off the top, bottom, left, or right
+    
+    path_substitution can be:
+        - tuple[str, str]: simple string replacement (old behavior)
+        - tuple[re.Pattern, str]: regex pattern substitution (new behavior)
     """
     if path_substitution is not None:
-        filename = str(filename).replace(
-            path_substitution[0],
-            path_substitution[1],
-        )
+        if isinstance(path_substitution[0], re.Pattern):
+            # Regex substitution
+            filename = path_substitution[0].sub(path_substitution[1], str(filename))
+        else:
+            # Old string replacement behavior
+            filename = str(filename).replace(
+                path_substitution[0],
+                path_substitution[1],
+            )
     filename = pth(filename)
     if filename.with_suffix('.jpg').exists():
         image = Image.open(filename.with_suffix('.jpg'))
@@ -133,7 +143,7 @@ def load_from_filename(
 def get_image(
     ds: Dataset | None, 
     image_ptr: str | int,
-    path_substitution: tuple[str, str] | None = None,
+    path_substitution: tuple[str | re.Pattern, str] | None = None,
     pdf_backend: str = "pdfium",
 ):
     '''

@@ -274,8 +274,10 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
 
         self._log_queue: Union["Queue[Any]", None] = None
 
-        self._generator_sent_and_received: Dict[str, Tuple[int, int]] = defaultdict(lambda: [0, 0])
-        '''tracks number of rows sent from a generator step and the amount of those that have been processed'''
+        self._generator_sent_and_received: Dict[str, list[int]] = defaultdict(lambda: [0] * len(self._get_steps_load_stages()[0]))
+        '''tracks number of rows sent from a generator step and the amount of those that have been processed for each stage'''
+        self._tracked_qsizes: Dict[str, int] = defaultdict(int)
+        '''tracks the size of the input queue of a step'''
 
         self.cost_tracker: Dict[str, float] = defaultdict(float)
         '''tracks the cost of each lm for each step'''
@@ -1162,7 +1164,8 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
         for predecessor_name, created_from in batch.created_from.items():
             if self.dag.get_step(predecessor_name)[constants.STEP_ATTR_NAME].is_generator:
                 # this tracks the number of rows from predecessor_name that were used to create the batch
-                self._generator_sent_and_received[predecessor_name][1] += sum(from_batch[2] for from_batch in created_from)
+                self._generator_sent_and_received[predecessor_name][self._current_stage] += sum(from_batch[2] for from_batch in created_from)
+        self._tracked_qsizes[batch.step_name] -= 1
 
         if batch.last_batch or batch.route_step_last_batch:
             self._register_stages_last_batch(batch.step_name)
@@ -1795,6 +1798,8 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
             if batch.last_batch:
                 self._notify_convergence_steps_of_last_batch(batch.step_name)
 
+        self._tracked_qsizes[batch.step_name] += 1
+
     def _notify_convergence_steps_of_last_batch(self, receiving_route_step: str) -> None:
         """Notify convergence steps of the last batch.
 
@@ -1948,14 +1953,25 @@ class BasePipeline(ABC, RequirementsMixin, _Serializable):
     ) -> None:
         """Request batches from a GeneratorStep based on initial queue sizes and pending output batches."""
         # I am avoiding checking the queues to lower the overhead of the output batch processing which is a bottleneck
-        sent_rows = self._generator_sent_and_received[step_name][0]
-        received_rows = self._generator_sent_and_received[step_name][1]
-        batch_size = self.dag.get_step(step_name)[constants.STEP_ATTR_NAME].batch_size
-        to_request = max(
-            len(successors) * constants.INPUT_QUEUE_LOAD_LEVEL -
-            ((sent_rows - received_rows) // batch_size),
-            0
-        )
+        steps_load_stages, _ = self._get_steps_load_stages()
+        # we won't receive batches back from future stages
+        successors = [s for s in successors if s in steps_load_stages[self._current_stage]]
+
+        # sent_rows = self._generator_sent_and_received[step_name][0]
+        # received_rows = self._generator_sent_and_received[step_name][1]
+        # batch_size = self.dag.get_step(step_name)[constants.STEP_ATTR_NAME].batch_size
+        # to_request = max(
+        #     len(successors) * constants.INPUT_QUEUE_LOAD_LEVEL -
+        #     ((sent_rows - received_rows) // batch_size),
+        #     0
+        # )
+        generators_in_stage = [
+            step_name for step_name in steps_load_stages[self._current_stage] 
+            if self.dag.get_step(step_name)[constants.STEP_ATTR_NAME].is_generator
+        ]
+        to_request = sum([(max(constants.INPUT_QUEUE_LOAD_LEVEL - self._tracked_qsizes[s], 0)) for s in successors])
+        already_requested = sum([self._tracked_qsizes[s] for s in generators_in_stage])
+        to_request = max(to_request - already_requested, 0)
         # Issue requests
         for _ in range(to_request):
             self._request_batch_from_generator(step_name)

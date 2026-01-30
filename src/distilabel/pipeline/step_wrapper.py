@@ -288,7 +288,13 @@ class _StepWrapper:
                 self.step._logger.debug(
                     f"Step '{self.step.name}' waiting for next batch request..."
                 )
-                batch = self.input_queue.get()
+                batch = None
+                while batch is None: # allows breakpointing
+                    try:
+                        batch = self.input_queue.get(timeout=10)
+                    except:
+                        continue
+
                 if batch is None:
                     self.step._logger.info(
                         f"🛑 Stopping yielding batches from step '{self.step.name}'"
@@ -348,7 +354,9 @@ class _StepWrapper:
 
             # get the cache key before any modifications to the received batch
             # so that we can correctly map the sent batch to the response
-            cache_key = self.cache_key(batch) if isinstance(batch, _Batch) else Path('none')
+            cache_key = Path('none')
+            if self.step.use_cache:
+                cache_key = self.cache_key(batch) if isinstance(batch, _Batch) else Path('none')
             # Since only one of the route steps will receive a batch with last_batch = True, if this step is a route step, 
             # it likely won't receive a batch with last_batch = True and needs to create this
             # itself once it knows which batch is actually the last one for it.
@@ -364,9 +372,9 @@ class _StepWrapper:
             # but we want route_step_last_batch logic to be handled normally
             # so it comes after that
             if (
-                _Batch.cached(cache_key) 
+                self.step.use_cache
                 and not self.step.invalidate_cache
-                and self.step.use_cache
+                and _Batch.cached(cache_key) 
             ):
                 response = _Batch.from_json(cache_key)
                 response.route_step_last_batch = batch.route_step_last_batch

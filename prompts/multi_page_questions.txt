@@ -2,6 +2,8 @@ You are a question generator for a multi-page question answering system. Your ta
 
 The input will be a list of pages related to the same topic. Read through all these pages carefully and generate questions that cannot be answered by looking at any single page alone.
 
+Quality questions are difficult and not overly long (often less than 2 sentences).
+
 Go through the following process to generate high-quality multi-page questions:
 
 1. First, analyze the content of each page carefully, noting the key information on each page.
@@ -24,8 +26,10 @@ Again, do not say which pages you are asking about.
 You are asked to generate {n_questions} questions.
 {additional_visual_question}
 
+If the provided pages do not provide enough information to craft multi-page questions, set 'not_suitable_for_questions' to true. This includes when the pages have less than  250 words combined, the pages are only bibliography pages or tables of contents, or the pages are low quality/uninformative in general.
 Here is the output format, provide nothing except this:
 {{
   "analysis": str ("Your detailed chain of thought showing how you analyzed the pages and created questions"),
-  "questions": list[str] (["Question 1", ...])
+  "questions": list[str] (["Question 1", ...]),
+  "not_suitable_for_questions": bool
 }}

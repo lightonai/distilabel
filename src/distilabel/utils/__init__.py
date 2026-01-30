@@ -70,8 +70,10 @@ from .misc import (
     try_model_validate,
     add_index_badge_to_image,
     sample_match_target_histogram,
-    take_first_doc_occurrence,
+    take_n_first_doc_occurrences,
     get_page_count,
+    filter_path_exists,
+    resolve_path,
 )
 
 from .cpe import continuous_parallel_execution
@@ -136,8 +138,10 @@ __all__ = [
     "try_model_validate",
     "add_index_badge_to_image",
     "sample_match_target_histogram",
-    "take_first_doc_occurrence",
+    "take_n_first_doc_occurrences",
     "get_page_count",
+    "filter_path_exists",
+    "resolve_path",
     # Timer
     "get_timer",
 ]

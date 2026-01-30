@@ -1,4 +1,5 @@
 import dotenv
+import re
 from pathlib import Path
 dotenv.load_dotenv()
 
@@ -39,7 +40,7 @@ question_prompt_sampler_config = PromptSamplerConfig(
     samples_per_prompt_kwarg='n_questions',
     distributions={
         'n_questions': CategoricalDist(
-            choices=[('1', 1), ('2', 1), ('3', 1), ('4', 1), ('5', 1)]
+            choices=[('1', 1), ('2', 2), ('3', 2), ('4', 1), ('5', 1)]
         ),
         'question_spec': CategoricalDist(
             choices=[
@@ -50,7 +51,8 @@ question_prompt_sampler_config = PromptSamplerConfig(
                 ("ask a question requiring multi-step reasoning about the page and ask for the model's thought process", 1),
                 ("ask a question that requires an open ended answer and ask for a detailed response", 1),
                 ("request a specific piece of information from the context", 1),
-                ("ask a question requiring math", 1),
+                ("ask a question requiring difficult math in finance, physics, accounting, engineering or whatever field is relevant to the context", 1),
+                ('ask a difficult question that has a short, verifiable (not open-ended or debatable, has a single correct answer) answer (a number, string, list, dictionary, yes/no, etc.) and ask for the model to reason before answering', 1.0),
                 ("ask a question regarding a table, graph, chart, diagram or other visual element. This should challenge the model to the utmost at precisely reading table rows, columns, specific values or sets of values, performing math operations, computing related mathematical/financial values, reasoning about the table data, reading elements from graphs, charts, diagrams, etc., extrapolating or interpolating graphs and charts, performing calculations based on graphs/charts/etc., answering questions conditional on values in one graph or table using values from another (e.g. what is the Q2 performance of the company with the highest Q1 performance in table/chart 12?), finding visual elements related to a specific topic, tracking/counting/finding entities from multiple pages and more. Be creative and come up with new types of questions that put the model to the test. (if no visual elements are present, this question spec should be an empty string)", 1),
             ],
             samples_per_prompt=None,
@@ -77,21 +79,29 @@ question_prompt_sampler_config = PromptSamplerConfig(
     }
 )
 
-EXCLUDE_PDFS = set(Path('/mnt/nfs/austin_shared/mp_data_gen/bench_pdfs.txt').read_text().splitlines())
-DS_PATH = Path('/mnt/nfs/austin_shared/data/scraped_and_pdfa')
-IMAGES_DS_PATH = Path('/mnt/nfs/austin_shared/data/all_pdfs_images_ds')
-PDF_ROOT = Path('/mnt/nfs/pdfs')
-CACHE_DIR = Path('/mnt/nfs/austin_shared/mp_data_gen/distilabel/out/lc_sft/prompt_sampler_fixed')
+EXCLUDE_PDFS = set(Path('/home/austin_veselka/lc/data/bench_pdfs.txt').read_text().splitlines())
+DS_PATH = Path('/home/austin_veselka/lc/data/scraped_and_pdfa_long_upsampled_sqrt_multinomial')
+IMAGES_DS_PATH = Path('/home/austin_veselka/lc/data/all_pdfs_images_ds')
+PDF_ROOT = Path('/home/austin_veselka/lc/data/pdfs')
+CACHE_DIR = Path('/home/austin_veselka/lc/distilabel/out/lc_sft/v2')
 AVAILABLE_GPUS = [0, 1, 2, 3, 4, 5, 6, 7]
-PATH_SUBSTITUTION = ('/lustre/fsn1/projects/rech/eya/uzj46do/pdfs/', '/mnt/nfs/pdfs/')
+PATH_SUBSTITUTION = (re.compile(r'^(/lustre/fsn1/projects/rech/eya/uzj46do/pdfs/|/mnt/nfs/pdfs/)'), '/home/austin_veselka/lc/data/pdfs/')
 
-PIPELINE_NAME = 'single_page_q_v1'
+PIPELINE_NAME = 'single_page_q_v2'
 
 def get_lm_config(
     path: str, 
     data_ratio: float = 1.0, 
     gpu_mesh: tuple[int | None, int | None, int | None] = (1, 1, 1),
 ):
+    vllm_kwargs = {
+        'limit-mm-per-prompt': "'{\"image\": 1, \"video\": 0}'",
+        'max-model-len': '65536',
+        'gpu-memory-utilization': 0.9,
+        'mm-processor-cache-gb': '0',
+    }
+    if 'FP8' not in path:
+        vllm_kwargs |= {'quantization': 'fp8'}
     temperature = 0.7
     if 'gpt-5' in path:
         temperature = 1.0
@@ -100,16 +110,11 @@ def get_lm_config(
         data_ratio=data_ratio, 
         task_name='question_generation',
         temperature=temperature,
-        max_new_tokens=16384,
+        max_new_tokens=32768,
         replicas=gpu_mesh[0],
         tp_size=gpu_mesh[1],
         replicas_per_vllm_server=gpu_mesh[2],
-        vllm_kwargs={
-            'limit-mm-per-prompt': "'{\"image\": 1, \"video\": 0}'",
-            'quantization': 'fp8',
-            'max-model-len': '32768',
-            'gpu-memory-utilization': 0.9,
-        } | ({'max-num-seqs': '64'} if '72B' in path else {}),
+        vllm_kwargs=vllm_kwargs,
         out_model='SinglePageQuestions',
         system_template_path='distilabel/prompts/single_page_questions.txt',
         prompt_sampler_config=question_prompt_sampler_config,
@@ -118,14 +123,15 @@ def get_lm_config(
 stages = [
     Stage(
         lm_configs=[ # 72b, 32b, gpt-5-nano, gemini-2.5-flash-lite
-            get_lm_config('Qwen/Qwen2.5-VL-72B-Instruct', data_ratio=1.0, gpu_mesh=(2, 2, 2)),
-            get_lm_config('Qwen/Qwen2.5-VL-32B-Instruct', data_ratio=1.0, gpu_mesh=(4, 1, 2)),
-            get_lm_config('gemini-2.5-flash-lite', data_ratio=1.0, gpu_mesh=(1, None, 1)),
-            get_lm_config('gemini-2.5-flash', data_ratio=1.0, gpu_mesh=(1, None, 1)),
+            get_lm_config('zai-org/GLM-4.5V-FP8', data_ratio=3.0, gpu_mesh=(8, 2, 2)),
+            get_lm_config('Qwen/Qwen3-VL-32B-Instruct-FP8', data_ratio=3.0, gpu_mesh=(8, 2, 2)),
+            get_lm_config('Qwen/Qwen2.5-VL-72B-Instruct', data_ratio=1.0, gpu_mesh=(8, 2, 2)),
+            get_lm_config('gemini-2.5-flash-lite', data_ratio=0.2, gpu_mesh=(1, None, 1)),
+            # get_lm_config('gemini-2.5-flash', data_ratio=1.0, gpu_mesh=(1, None, 1)),
             # get_lm_config('gemini-2.5-pro', data_ratio=1.0, gpu_mesh=(1, None, 1)),
         ],
         available_gpus=AVAILABLE_GPUS,
-        max_dims=(1000, 1000),
+        max_dims=(1344, 1344),
     ),
 ]
 

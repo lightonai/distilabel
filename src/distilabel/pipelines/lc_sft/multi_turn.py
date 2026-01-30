@@ -62,10 +62,9 @@ random.seed(SEED)
 
 STAGE = 0
 '''tracks the current stage of the pipeline'''
-BATCH_SIZE = 32
+BATCH_SIZE = 64
 
-def _resolve_path(path: str) -> str:
-    return path.replace(config.path_substitution[0], config.path_substitution[1])
+_resolve_path = partial(utils.resolve_path, path_substitution=config.path_substitution)
 
 def _select_raw_ds(dataset: Dataset, n: int, num_proc: int, offset: int = 0) -> Dataset:
     ds = dataset.select(range(offset, offset + n))
@@ -88,9 +87,9 @@ def get_ds(n_sp: int, n_mp: int, seed: int, allow_doc_reuse: bool = False) -> Da
     ds = load_from_disk(DS_PATH)
     ds = ds.shuffle(seed=seed)
     if not allow_doc_reuse:
-        ds = utils.take_first_doc_occurrence(ds, _resolve_path)
+        ds = utils.take_n_first_doc_occurrences(ds, _resolve_path=_resolve_path, n=1)
     n_mp = min(n_mp, len(ds))
-    ds = _select_raw_ds(ds, n_mp, num_proc, offset=0)
+    mp_ds = _select_raw_ds(ds, n_mp, num_proc, offset=0)
     sp_ds = _select_raw_ds(ds, n_sp, num_proc, offset=n_mp)
 
     # just need to make various types of source combinations
@@ -106,8 +105,9 @@ def get_ds(n_sp: int, n_mp: int, seed: int, allow_doc_reuse: bool = False) -> Da
     split_sizes = [((i * n_mp) // sum(split_weights)) for i in split_weights]
     fn_to_page_count = utils.count_all_pages(PDF_ROOT, CACHE_DIR)
     idx_to_ifn_images_ds = utils.get_idx_to_filename(IMAGES_DS_PATH)
+    mp_ds = mp_ds.filter(lambda row: _resolve_path(utils.pdf_name(row['image_filename'])) in fn_to_page_count)
     ds_dict = augment_into_splits(
-        dataset=ds, 
+        dataset=mp_ds, 
         split_sizes=split_sizes, 
         split_names=split_names, 
         fn_to_page_count=fn_to_page_count, 
@@ -135,6 +135,7 @@ def _lm_generation_task(
     lm_input_col_prefixes: list[str] = [],
     output_mappings: dict[str, str] = {},
     input_mappings: dict[str, str] = {},
+    system_col: str | None = None,
     use_cache: bool = True,
     invalidate_cache: bool = False,
     input_batch_size: int = BATCH_SIZE,
@@ -155,6 +156,7 @@ def _lm_generation_task(
         resources=StepResources(replicas=lm.lm_config.replicas, gpus=lm.lm_config.n_gpus, oversubscribe=lm.lm_config.replicas_per_vllm_server),
         output_mappings=output_mappings,
         input_mappings=input_mappings,
+        system_col=system_col,
         **lm.lm_config.task_kwargs,
     )
 
@@ -256,7 +258,7 @@ def run_pipeline(config: Config):
     global BATCH_SIZE
     
     stages = config.stages
-    dataset = get_ds(n_sp=30, n_mp=270, seed=SEED)
+    dataset = get_ds(n_sp=400, n_mp=600, seed=SEED)
 
     distiset = dataset
     cost_tracker = defaultdict(int)
@@ -318,99 +320,88 @@ def run_pipeline(config: Config):
             ]  # cols: ['source', 'conversation_history', 'followup_on_question'] -> ['question', 'question_model_name', 'question_system', ...]
             drop_none_q = _drop_none_str(name="drop_none_q", cols=['question'])  # cols: ['question', ...] -> ['question', ...]
 
-            # ---------------------- Stage 1: Evidence extraction ----------------------
-            STAGE = 1
-            stage = config.stages[STAGE]
-            lms = pipe_utils.make_lms(config, stage, use_cache=True)
+            # # ---------------------- Stage 1: Evidence extraction ----------------------
+            # STAGE = 1
+            # stage = config.stages[STAGE]
+            # lms = pipe_utils.make_lms(config, stage, use_cache=True)
 
-            # Chunk source into 1-page chunks per row
-            split_chunks = Split(
-                name='split_chunks',
-                input_col='source',
-                chunk_size=1,
-                input_batch_size=BATCH_SIZE * 8,
-            )
+            # # Chunk source into 1-page chunks per row
+            # split_chunks = Split(
+            #     name='split_chunks',
+            #     input_col='source',
+            #     chunk_size=1,
+            #     input_batch_size=BATCH_SIZE * 8,
+            # )
 
-            evidence_router = pipe_utils.data_router(
-                step_distribution=[lm.lm_config.data_ratio for lm in lms]
-            )
-            extract_evidence = [
-                _lm_generation_task(
-                    name=f'evidence_in_chunks_{i}',
-                    use_cache=True,
-                    # invalidate_cache=True,
-                    lm=lm,
-                    stage=stage,
-                    lm_input_cols=['question'],
-                    lm_input_col_prefixes=['Given question: '],
-                    output_mappings={'system': 'evidence_system', 'model_name': 'evidence_model_name'},
-                    input_batch_size=BATCH_SIZE * 8,
-                )
-                for i, lm in enumerate(lms)
-            ]  # cols: ['source', 'question', ...] -> ['evidence', 'relevant', 'evidence_system', 'evidence_model_name', ...]
+            # evidence_router = pipe_utils.data_router(
+            #     step_distribution=[lm.lm_config.data_ratio for lm in lms]
+            # )
+            # extract_evidence = [
+            #     _lm_generation_task(
+            #         name=f'evidence_in_chunks_{i}',
+            #         use_cache=True,
+            #         # invalidate_cache=True,
+            #         lm=lm,
+            #         stage=stage,
+            #         lm_input_cols=['question'],
+            #         lm_input_col_prefixes=['Given question: '],
+            #         output_mappings={'system': 'evidence_system', 'model_name': 'evidence_model_name'},
+            #         input_batch_size=BATCH_SIZE * 8,
+            #     )
+            #     for i, lm in enumerate(lms)
+            # ]  # cols: ['source', 'question', ...] -> ['evidence', 'relevant', 'evidence_system', 'evidence_model_name', ...]
 
-            filter_evidence = FilterRows(
-                name='filter_evidence',
-                cols=['evidence'],
-                condition=utils.generation_is_structured,
-                input_batch_size=BATCH_SIZE,
-            )
+            # filter_evidence = FilterRows(
+            #     name='filter_evidence',
+            #     cols=['evidence'],
+            #     condition=utils.generation_is_structured,
+            #     input_batch_size=BATCH_SIZE,
+            # )
 
-            # Rejoin all chunks for each row (global step), restoring original source
-            rejoin_chunks = Rejoin(
-                name='rejoin_chunks',
-                input_col='source',
-                duplicates_cols=[
-                    'question', 
-                    'question_model_name', 
-                    'split', 
-                    'evidence_system',
-                    'question_system',
-                    'hard_negs_idx_img_img',
-                    'hard_negs_idx_txt_img',
-                    'followup_on_question',
-                    'conversation_history',
-                    'conversation',
-                    'analysis',
-                    'partial_source',
-                ],
-                input_batch_size=BATCH_SIZE,
-            )
+            # # Rejoin all chunks for each row (global step), restoring original source
+            # rejoin_chunks = Rejoin(
+            #     name='rejoin_chunks',
+            #     input_col='source',
+            #     duplicates_cols=[
+            #         'question', 
+            #         'question_model_name', 
+            #         'split', 
+            #         'evidence_system',
+            #         'question_system',
+            #         'hard_negs_idx_img_img',
+            #         'hard_negs_idx_txt_img',
+            #         'followup_on_question',
+            #         'conversation_history',
+            #         'conversation',
+            #         'analysis',
+            #         'partial_source',
+            #     ],
+            #     input_batch_size=BATCH_SIZE,
+            # )
 
-            # Combine evidence text from chunks
-            combine_evidence = Map(
-                name='combine_evidence',
-                fn=_combine_evidence,
-                cols=['evidence', 'relevant', 'source'],
-                output_cols=['combined_evidence'],
-                input_batch_size=BATCH_SIZE,
-                output_mappings={'source': 'page_source'},
-            )  # cols: ['source', 'evidence', 'relevant'] -> ['page_source', 'combined_evidence']
+            # # Combine evidence text from chunks
+            # combine_evidence = Map(
+            #     name='combine_evidence',
+            #     fn=_combine_evidence,
+            #     cols=['evidence', 'relevant', 'source'],
+            #     output_cols=['combined_evidence'],
+            #     input_batch_size=BATCH_SIZE,
+            #     output_mappings={'source': 'page_source'},
+            # )  # cols: ['source', 'evidence', 'relevant'] -> ['page_source', 'combined_evidence']
 
-            filter_relevant = FilterRows(
-                name='filter_relevant',
-                cols=['relevant'],
-                condition=utils.logical_and_filters(_some_relevant, utils.generation_is_structured),
-                input_batch_size=BATCH_SIZE,
-            )
+            # filter_relevant = FilterRows(
+            #     name='filter_relevant',
+            #     cols=['relevant'],
+            #     condition=utils.logical_and_filters(_some_relevant, utils.generation_is_structured),
+            #     input_batch_size=BATCH_SIZE,
+            # )
 
             # ---------------------- Stage 2: answer using evidence ----------------------
-            STAGE = 2
+            STAGE = 1
             stage = config.stages[STAGE]
 
             lms = pipe_utils.make_lms(config, stage, use_cache=True)
             lc_mm_lms = [lm for lm in lms if lm.lm_config.task_name == 'overall_answer_lc_mm']
-
-            # for the LC MM models, we want to use some top K most relevant pages in addition to the extracted
-            # text context because the images will help ground the models and the models selected for this branch
-            # should be strong enough to use the context effectively
-            set_lc_mm_source = Map(
-                name='set_lc_mm_source',
-                fn=partial(_set_lc_mm_source, K=TOP_K_PAGES),
-                cols=['relevance_score', 'page_source'],
-                output_cols=['source'],
-                input_batch_size=BATCH_SIZE,
-            )
 
             lc_mm_answer_router = pipe_utils.data_router(
                 step_distribution=[lm.lm_config.data_ratio for lm in lc_mm_lms]
@@ -422,15 +413,12 @@ def run_pipeline(config: Config):
                     name=f'answer_generation_lc_mm_{i}',
                     lm=lm,
                     stage=stage,
-                    lm_input_cols=['combined_evidence', 'question'],
-                    lm_input_col_prefixes=['Per-page relevant context and your current chain of thought (feel free to correct your previous mistakes): ', ''],
-                    extra_cols=['combined_evidence'],
+                    lm_input_cols=['question'],
+                    system_col='default_system',  # use model default system prompt
                     output_mappings={
                         'generation': 'answer',
                         'system': 'answer_system', 
                         'model_name': 'answer_model_name', 
-                        'source': 'top_k_pages',
-                        'combined_evidence': 'evidence',
                     },
                 )
                 for i, lm in enumerate(lc_mm_lms)
@@ -441,7 +429,7 @@ def run_pipeline(config: Config):
                 cols=['answer'],
                 condition=utils.generation_is_structured,  # will simply check not None
                 input_batch_size=BATCH_SIZE,
-            )  # cols: ['page_source'] -> ['source'] # Restore original set of pages (e.g. the full document) as source for output
+            )
             map_to_conversation = Map(
                 name='map_to_conversation',
                 fn=_map_to_conversation,
@@ -449,33 +437,21 @@ def run_pipeline(config: Config):
                 output_cols=['conversation'],
                 input_batch_size=BATCH_SIZE,
             )
-            reset_source = NoOp(name='reset_source', cols=['page_source'], output_mappings={'page_source': 'source'}, input_batch_size=BATCH_SIZE)
 
             ## Pipeline
             (
                 load_data >> followup_sample_conversation >> followup_question_router >> followup_question >> drop_none_q >> 
                 
-                split_chunks >> evidence_router >> extract_evidence >> filter_evidence >> rejoin_chunks >> combine_evidence >> filter_relevant >> 
-                
-                set_lc_mm_source >> lc_mm_answer_router >> generate_answers_lc_mm >> filter_answers >> map_to_conversation >> reset_source
+                lc_mm_answer_router >> generate_answers_lc_mm >> filter_answers >> map_to_conversation
             )
         
         distiset, loop_cost_tracker = pipeline.run(
             load_groups=(
                 pipe_utils.steps_to_load_groups(
-                    [load_data, followup_sample_conversation, *followup_question, drop_none_q, split_chunks],
+                    [load_data, followup_sample_conversation, *followup_question, drop_none_q],
                     len(stage.available_gpus),
                 ) + pipe_utils.steps_to_load_groups(
-                    [*extract_evidence, filter_evidence],
-                    len(stage.available_gpus),
-                ) + pipe_utils.steps_to_load_groups(  # global step by itself
-                    [rejoin_chunks],
-                    len(stage.available_gpus),
-                ) + pipe_utils.steps_to_load_groups(
-                    [combine_evidence, filter_relevant],
-                    len(stage.available_gpus),
-                ) + pipe_utils.steps_to_load_groups(
-                    [set_lc_mm_source, *generate_answers_lc_mm, filter_answers, map_to_conversation, reset_source],
+                    [*generate_answers_lc_mm, filter_answers, map_to_conversation],
                     len(stage.available_gpus),
                 )
             ),
@@ -489,12 +465,15 @@ def run_pipeline(config: Config):
 
 fn_to_idx: dict[str, int] | None = None
 
-def convert_to_vision(row: dict, path_substitution: tuple[str, str] | None = None, **kwargs) -> dict:
+def convert_to_vision(row: dict, path_substitution: tuple[str | re.Pattern, str] | None = None, **kwargs) -> dict:
     '''
     Convert the row to vision format
     '''
     global fn_to_idx
-    image_indices = [fn_to_idx[ifn.replace(path_substitution[0], path_substitution[1])] for ifn in row['source']]
+    image_indices = [
+        fn_to_idx[_resolve_path(ifn)] 
+        for ifn in row['source']
+    ]
 
     conversation = [{k: v for k, v in msg.items() if v is not None} for msg in row['conversation'] if msg.get('role') is not None]
     user_content = (
@@ -847,7 +826,7 @@ if __name__ == "__main__":
 
     # for synthetic cot or reasoning model, control token in system should always use think and otherwise be per-prompt
     synthetic_cot_ds = load_from_disk(CACHE_DIR / 'synthetic_cot_vds')
-    reasoning_ds = load_from_disk(CACHE_DIR / 'reasoning_vds')
+    # reasoning_ds = load_from_disk(CACHE_DIR / 'reasoning_vds')
 
     listify_cols = lambda row: row | {
         'answer_model_name': [row['answer_model_name']] if isinstance(row['answer_model_name'], str) else row['answer_model_name'],
@@ -859,9 +838,9 @@ if __name__ == "__main__":
     synthetic_cot_ds = synthetic_cot_ds.map(
         utils.hf_batched(listify_cols), batched=True,
     )
-    reasoning_ds = reasoning_ds.map(
-        utils.hf_batched(listify_cols), batched=True,
-    )
+    # reasoning_ds = reasoning_ds.map(
+    #     utils.hf_batched(listify_cols), batched=True,
+    # )
     
     synthetic_cot_mt = concatenate_conversations(
         synthetic_cot_ds,
@@ -869,12 +848,12 @@ if __name__ == "__main__":
         different_source_target_images=distiset_n_images,
         seed=SEED,
     )
-    reasoning_mt = concatenate_conversations(
-        reasoning_ds,
-        same_source_target_images=distiset_n_images,
-        different_source_target_images=distiset_n_images,
-        seed=SEED,
-    )
+    # reasoning_mt = concatenate_conversations(
+    #     reasoning_ds,
+    #     same_source_target_images=distiset_n_images,
+    #     different_source_target_images=distiset_n_images,
+    #     seed=SEED,
+    # )
     mt_dataset = concatenate_datasets([
         distiset, 
         synthetic_cot_mt['same_source'], 
@@ -886,11 +865,11 @@ if __name__ == "__main__":
     think.save_to_disk(CACHE_DIR / 'multi_turn_w_cot_vds')
     no_think.save_to_disk(CACHE_DIR / 'multi_turn_no_think_vds')
 
-    mt_dataset = concatenate_datasets([
-        distiset, 
-        reasoning_mt['same_source'], 
-        reasoning_mt['different_source'],
-    ])
-    think = mt_dataset.map(utils.hf_batched(partial(_apply_control_tok_rules, is_think=True, control_token='<reasoning>')), batched=True)
-    think.save_to_disk(CACHE_DIR / 'multi_turn_w_reasoning_vds')
+    # mt_dataset = concatenate_datasets([
+    #     distiset, 
+    #     reasoning_mt['same_source'], 
+    #     reasoning_mt['different_source'],
+    # ])
+    # think = mt_dataset.map(utils.hf_batched(partial(_apply_control_tok_rules, is_think=True, control_token='<reasoning>')), batched=True)
+    # think.save_to_disk(CACHE_DIR / 'multi_turn_w_reasoning_vds')
 

@@ -61,8 +61,7 @@ TARGET_COUNTS = {
     # 'reasoning_doc': 32,
 }
 
-def _resolve_path(path: str) -> str:
-    return path.replace(config.path_substitution[0], config.path_substitution[1])
+_resolve_path = partial(utils.resolve_path, path_substitution=config.path_substitution)
 
 def get_ds(n: int, seed: int, use_source: bool = True, allow_doc_reuse: bool = False) -> Dataset:
     ds = load_from_disk(DS_PATH)
@@ -73,7 +72,7 @@ def get_ds(n: int, seed: int, use_source: bool = True, allow_doc_reuse: bool = F
 
     # if doc reuse is not allowed, prune the dataset to only include one page from each doc (first occurrence)
     if not allow_doc_reuse:
-        ds = utils.take_first_doc_occurrence(ds, _resolve_path)
+        ds = utils.take_n_first_doc_occurrences(ds, _resolve_path)
 
     # Exclude benchmark PDFs
     ds = utils.remove_pdfs_from_dataset(
